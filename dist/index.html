@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6f3">
+  <title>CP Value Mart · Singapore</title>
+  <meta name="description" content="Browse everyday essentials at CP Value Mart. Interactive storefront and admin design preview.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <dialog id="image-dialog" class="image-dialog" aria-labelledby="image-dialog-title">
+    <button class="modal-close" type="button" data-close-image aria-label="Close image preview">×</button>
+    <h2 id="image-dialog-title"></h2>
+    <figure><img alt="" data-image-fallbacks="[]" hidden><p class="photo-error" hidden>Image unavailable</p></figure>
+  </dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
