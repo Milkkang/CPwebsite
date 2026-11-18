@@ -119,12 +119,39 @@ function productList(params) {
 function productRows({p,variants}) {
   const span=' rowspan="'+variants.length+'"';
   const product=productLabel(p,'<b>'+e(p.name)+'</b><small>'+e(p.brand)+' · '+e(p.sku)+'</small>'+
-    (p.original?'<small>Original: '+e(p.original)+'</small>':''));
+    '');
   return variants.map((v,i)=>'<tr class="'+(i===0?'product-row-start':'')+'">'+
     (i===0?'<td'+span+'><input type="checkbox" name="id" value="'+e(p.id)+'" aria-label="Select '+e(p.name)+'"></td><td'+span+'>'+product+'</td>':'')+
-    '<td><div class="admin-variant">'+photo(p,'variant-thumb',v)+'<div><b>'+e(v.name)+'</b><small>'+e(v.sku)+'</small></div></div></td>'+
-    '<td class="variant-number">'+cash(v.price)+'</td><td class="variant-stock"><span>'+v.stock+'</span><button type="button" class="btn outline small" data-stock="'+e(v.sku)+'" aria-label="Adjust stock for '+e(v.sku)+'">Adjust</button></td><td>'+v.min+'</td>'+
-    (i===0?'<td'+span+'>'+badge(p.status)+'</td><td'+span+'>'+link(editHref(p),'Edit ↗','text-link')+'</td>':'')+'</tr>').join('');
+    '<td><div class="admin-variant">'+photo(p,'variant-thumb',v)+'<div>'+inlineField('name',v.sku,v.name,'text','maxlength="60"')+'<small>'+e(v.sku)+'</small></div></div></td>'+
+    '<td class="variant-number">'+inlineField('price',v.sku,(v.price/100).toFixed(2),'number','min="0" max="99999" step="0.01"')+'</td><td class="variant-stock"><span>'+v.stock+'</span><button type="button" class="btn outline small" data-stock="'+e(v.sku)+'" aria-label="Adjust stock for '+e(v.sku)+'">Adjust</button></td><td>'+inlineField('min',v.sku,v.min,'number','min="1" max="100000" step="1"')+'</td>'+
+    (i===0?'<td'+span+'><select class="inline-status" data-inline-status="'+e(p.id)+'" aria-label="Status for '+e(p.name)+'">'+opts(['Published','Draft','Archived'],p.status)+'</select></td><td'+span+'>'+link(editHref(p),'Edit ↗','text-link')+'</td>':'')+'</tr>').join('');
+}
+const inlineField=(kind,sku,value,type,extra)=>'<input class="inline-edit inline-'+kind+'" type="'+type+'" data-inline="'+kind+'" data-sku="'+e(sku)+'" aria-label="'+({name:'Variant name',price:'Price in SGD',min:'Minimum quantity'}[kind])+' for '+e(sku)+'" value="'+e(value)+'" '+extra+' required>';
+export function updateInlineProduct(kind,sku,value) {
+  const row=state.products.find(p=>p.variants.some(v=>v.sku===sku));
+  if(!row) return 'Product no longer exists.';
+  const variant=row.variants.find(v=>v.sku===sku);
+  const text=String(value).trim();
+  if(kind==='name') {
+    if(!text||text.length>60) return 'Enter a variant name of up to 60 characters.';
+    const suffix=' · '+variant.name;
+    if(row.name.endsWith(suffix)) row.name=row.name.slice(0,-suffix.length)+' · '+text;
+    variant.name=text;
+  } else if(kind==='price') {
+    if(!/^\d+(?:\.\d{1,2})?$/.test(text)||Number(text)>99999) return 'Enter a valid price with up to two decimal places.';
+    variant.price=moneyToCents(text);
+  } else if(kind==='min') {
+    const min=Number(text);
+    if(!/^\d+$/.test(text)||min<1||min>100000) return 'Enter a valid minimum quantity.';
+    variant.min=min;
+  } else return 'Unknown field.';
+  save();
+}
+export function updateInlineStatus(id,status) {
+  const p=findProduct(id);
+  if(!p) return 'Product no longer exists.';
+  if(!['Published','Draft','Archived'].includes(status)) return 'Choose a valid status.';
+  p.status=status;save();
 }
 function variantFields(v={},i=0,p={}) {
   return '<fieldset class="variant-fields"><legend>Variant '+(i+1)+'</legend><button type="button" class="btn outline small variant-remove" data-remove-variant aria-label="Delete variant '+(i+1)+'">Delete variant</button><input type="hidden" name="oldSku" value="'+e(v.sku??'')+'">'+
@@ -147,11 +174,9 @@ export function productEditor(id) {
     '<label>Category<select name="category">'+cats(p.category)+'</select></label><label>Status<select name="status">'+opts(['Draft','Published','Archived'],p.status)+'</select></label>'+
     '<label class="check-label featured-field"><input type="checkbox" name="featured"'+checked(p.featured)+'> Feature on homepage</label></div>'+
     '<label>Description<textarea name="description" rows="3" maxlength="1000">'+e(p.description)+'</textarea></label>'+
-    field('Search keywords','keywords',p.keywords,'maxlength="300" placeholder="English names, 中文 keywords, common abbreviations"')+'</section>'+
+    field('Search keywords','keywords',p.keywords,'maxlength="300" placeholder="English names, 中文 keywords, common abbreviations"')+
+    field('R2 image URL','image',p.image,'maxlength="350" placeholder="https://…"')+'</section>'+
     '<section class="panel form-stack"><div class="section-title"><h2>Variants, stock and price</h2><button type="button" class="btn outline small" data-add-variant>Add variant</button></div><div id="variant-fields">'+p.variants.map((v,i)=>variantFields(v,i,p)).join('')+'</div></section>'+
-    '<section class="panel form-stack"><h2>Image references</h2><div class="image-references">'+editorPhotos(p)+'</div>'+
-    field('Storefront image URL','image',p.image,'maxlength="350" placeholder="https://…"')+
-    field('Original image reference','original',p.original,'maxlength="300"')+field('R2 object key or reference URL','r2',p.r2,'maxlength="300"')+'</section>'+
     '<div class="button-row"><button class="btn primary">Save product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
 }
 function ordersTable(rows,filters) {
@@ -227,13 +252,8 @@ export function adminPage(page,id,params) {
   }
   return adminFrame(page,body);
 }
-function editorPhotos(p) {
-  return '<div>'+photo(p,'editor-photo')+'<small>Product image</small></div>'+
-    (imageUrl(p.original)?'<div>'+photo(p,'editor-photo',undefined,p.original)+'<small>Original image</small></div>':'');
-}
 export function refreshEditorPhotos(form) {
   const p=Object.fromEntries(new FormData(form));
-  form.querySelector('.image-references').innerHTML=editorPhotos(p);
   for(const preview of form.querySelectorAll('[data-variant-photo]')) {
     preview.innerHTML=photo(p,'thumb',{image:preview.parentElement.querySelector('input').value});
   }
@@ -292,7 +312,7 @@ export function storeProduct(form,values) {
     return {id:variant.sku,sku:variant.sku,name:name+' · '+variant.name,brand:values.get('brand').trim(),category:values.get('category'),status:values.get('status'),
       featured:values.has('featured')&&index===0,description:baseDescription?[baseDescription,variant.name].join(' · '):variant.name,
       keywords:[values.get('keywords').trim(),variant.name].filter(Boolean).join(' '),image:variantImage,
-      original:variant.image||values.get('original').trim(),r2:variant.image||values.get('r2').trim(),variants:[variant]};
+      original:variant.image||image||p?.original||'',r2:variant.image||image||p?.r2||'',variants:[variant]};
   });
   const index=p?state.products.indexOf(p):state.products.length;
   state.products.splice(index,p?1:0,...next);

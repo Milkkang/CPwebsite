@@ -1,6 +1,6 @@
 import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,makeOrder,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
-import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos} from './admin.js';
+import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
 
 const app=document.getElementById('app'), toast=document.getElementById('toast'), modal=document.getElementById('dialog');
 const imageDialog=document.getElementById('image-dialog');
@@ -273,12 +273,22 @@ document.addEventListener('click', async event=>{
 let editorPreviewTimer;
 document.addEventListener('input',event=>{
   const {form,name}=event.target;
-  if(form?.id!=='product-editor'||!['image','original','r2','variantImage'].includes(name)) return;
+  if(form?.id!=='product-editor'||!['image','variantImage'].includes(name)) return;
   clearTimeout(editorPreviewTimer);
   editorPreviewTimer=setTimeout(()=>{if(form.isConnected) refreshEditorPhotos(form);},250);
 });
 document.addEventListener('change',async event=>{
   const input=event.target;
+  if(input.dataset.inline) {
+    const error=updateInlineProduct(input.dataset.inline,input.dataset.sku,input.value);
+    if(error) {message(error);input.value=input.defaultValue;return;}
+    render();message('Product updated.');return;
+  }
+  if(input.dataset.inlineStatus) {
+    const error=updateInlineStatus(input.dataset.inlineStatus,input.value);
+    if(error) {message(error);render();return;}
+    render();message('Status updated.');return;
+  }
   if(input.id==='category-filter') {
     const q=route().params.get('q');
     location.hash=(input.value==='#/shop'&&q?href('/shop',{q}):input.value);

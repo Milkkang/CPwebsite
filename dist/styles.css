@@ -362,6 +362,13 @@ button.photo:disabled {opacity:1;cursor:default}
 .period-control {display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap;margin-bottom:14px}
 .period-options {display:flex;gap:6px;flex-wrap:wrap}
 .admin-variant {display:flex;align-items:center;gap:8px;white-space:nowrap}
+.admin-variant>div {min-width:0}
+.inline-edit,.inline-status {border:1px solid #d5e1d6;border-radius:7px;background:white;color:var(--ink);padding:6px 7px;font-size:.82rem;max-width:100%}
+.inline-edit:focus,.inline-status:focus {outline:2px solid #719b79;outline-offset:1px}
+.inline-name {width:170px;font-weight:650}
+.inline-price {width:78px}
+.inline-min {width:62px}
+.inline-status {width:104px}
 .variant-number,.variant-stock {white-space:nowrap}
 .variant-stock button {margin-left:7px}
 #bulk-form td[rowspan] {border-bottom:1px solid #e7ece6}
