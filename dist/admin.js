@@ -108,7 +108,7 @@ function productList(params) {
     .filter(row=>row.variants.length);
   return heading('Products',rows.length+' of '+state.products.length+' products',
     '<label class="btn outline import-label">Import CSV<input id="import-csv" type="file" accept=".csv,text/csv" class="sr-only"></label><button class="btn outline" data-export="products">Export CSV</button>'+go('/admin/products/new','Add product','btn primary'))+
-    '<p class="subtle import-hint"><button class="link-button" data-export="template">Download CSV template</button> · Import updates by product and variant SKU.</p>'+
+    '<p class="subtle import-hint">Edit variant name, price, MOQ or status directly; changes save when you leave the field. <button class="link-button" data-export="template">Download CSV template</button> · Import updates by product and variant SKU.</p>'+
     '<form class="admin-filters" id="admin-filter" data-path="/admin/products">'+field('Find product','q',q,'placeholder="Name, brand or SKU"')+
     '<label>Status<select name="status"><option value="">All statuses</option>'+opts(['Published','Draft','Archived'],status)+'</select></label>'+
     '<label>Availability<select name="low"><option value="">All stock levels</option><option value="1"'+selected(low,true)+'>Low stock (5 or fewer)</option></select></label><button class="btn outline">Filter</button></form>'+
@@ -166,7 +166,7 @@ function variantFields(v={},i=0,p={}) {
 export function productEditor(id) {
   const existing=findProduct(id);
   if(id!=='new'&&!existing) return empty('Product not found','Return to the product list.',go('/admin/products','View products','btn primary'));
-  const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[{}]};
+  const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]};
   return go('/admin/products','← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
     '<form id="product-editor" data-id="'+e(existing?.id??'')+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
     field('Product name','name',p.name,'required maxlength="120"')+field('Brand','brand',p.brand,'required maxlength="70"')+
@@ -308,6 +308,9 @@ export function storeProduct(form,values) {
   const description=values.get('description').trim();
   const baseDescription=p&&oldOption&&description.endsWith(' · '+oldOption)?description.slice(0,-(' · '+oldOption).length):description;
   const next=variants.map((variant,index)=>{
+    // A listing-level image change also replaces an unchanged variant image.
+    const previousVariant=p?.variants.find(old=>old.sku===variant.sku);
+    if(p&&image!==p.image&&variant.image===(previousVariant?.image??'')) variant.image=image;
     const variantImage=variant.image||image;
     return {id:variant.sku,sku:variant.sku,name:name+' · '+variant.name,brand:values.get('brand').trim(),category:values.get('category'),status:values.get('status'),
       featured:values.has('featured')&&index===0,description:baseDescription?[baseDescription,variant.name].join(' · '):variant.name,
