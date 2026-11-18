@@ -2,7 +2,7 @@ import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadA
 import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,makeOrder,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
-import {listingFromApi,catalogRequest,catalogQuery} from './catalog-client.js';
+import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
 
 const app=document.getElementById('app'), toast=document.getElementById('toast'), modal=document.getElementById('dialog');
 const imageDialog=document.getElementById('image-dialog');
@@ -247,10 +247,11 @@ function render({scroll=false}={}) {
       case 'category': body=categories.some(c=>c[0]===id)?catalog(path,params,id,remote.data):missing();break;
       case 'product': {
         const product=remote.data.product;
-        if(productView!==lastProductView){
+        if(isNewProductView(product,productView,lastProductView)){
           rememberProduct(product,params.get('sku'));
           if(auth.account&&!auth.recoveryOnly)authRequest('/api/shopping',{action:'recent',sku:product.sku}).then(loadMemberShopping).catch(()=>{});
         }
+        lastProductView=productView;
         body=detail(product,params,remote.data.related);break;
       }
       case 'cart': body=cart(repurchaseResult);break;
@@ -270,7 +271,7 @@ function render({scroll=false}={}) {
   document.title=(key&&heading?heading.textContent+' · ':'')+'CP Value Mart';
   if(scroll&&path!==lastPath) window.scrollTo(0,0);
   lastPath=path;
-  lastProductView=productView;
+  if(!productView)lastProductView='';
 }
 function navigate(path,params={}) {
   const destination=href(path,params);

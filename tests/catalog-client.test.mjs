@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {listingFromApi,catalogQuery} from '../dist/catalog-client.js';
+import {listingFromApi,catalogQuery,isNewProductView} from '../dist/catalog-client.js';
 
 test('published database listing retains price, available stock, MOQ and R2 images',()=>{
   const product=listingFromApi({sku:'SKU_1',name:'Example',variant_name:'2 pack',brand:'Brand',category_id:'paper-tissues',
@@ -19,4 +19,10 @@ test('catalog query passes server filters and page size',()=>{
   const url=new URL(catalogQuery(new URLSearchParams('q=soap&brand=Acme&sort=price-up&size=50&page=2'),'skin-care'),'https://cpvaluemart.com');
   assert.equal(url.pathname,'/api/products');
   assert.deepEqual(Object.fromEntries(url.searchParams),{q:'soap',brand:'Acme',sort:'price-up',size:'50',page:'2',category:'skin-care'});
+});
+
+test('a product view starts only after its API product has loaded',()=>{
+  assert.equal(isNewProductView(null,'/product/SKU_1',''),false);
+  assert.equal(isNewProductView({sku:'SKU_1'},'/product/SKU_1',''),true);
+  assert.equal(isNewProductView({sku:'SKU_1'},'/product/SKU_1','/product/SKU_1'),false);
 });
