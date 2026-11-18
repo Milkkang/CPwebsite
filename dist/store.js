@@ -1,3 +1,5 @@
+import {catalogProducts} from './catalog.js';
+
 export const categories = [
   ['personal-care','Personal Care','✳','sage'], ['hair-care','Hair Care','✿','lilac'],
   ['oral-care','Oral Care','✦','blue'], ['skin-care','Skin Care','◇','peach'],
@@ -5,33 +7,6 @@ export const categories = [
   ['paper-tissues','Paper & Tissues','▤','sand'], ['baby-family','Baby & Family','♡','peach'],
   ['food-pantry','Food & Pantry','◍','sand'], ['snacks-drinks','Snacks & Drinks','✺','lilac'],
   ['others','Others','＋','sage']
-];
-const seeds = [
-  ['Vaseline Gluta-Hya Body Lotion','Vaseline','skin-care',9.90,24,1,'body lotion serum 身体乳','11'],
-  ['Listerine Cool Mint Mouthwash','Listerine','oral-care',3.50,32,1,'mouthwash rinse 漱口水','24'],
-  ['Nivea Soft Moisturising Cream','Nivea','skin-care',7.90,16,1,'face hand body cream 面霜','17'],
-  ['Super Wet Wipes','Sanmex','paper-tissues',4.50,28,1,'wet tissue 湿纸巾','25'],
-  ['Nivea Fresh Energy Deodorant','Nivea','personal-care',5.90,26,1,'spray deodorant 止汗','22'],
-  ['Vaseline Cocoa Radiant Lotion','Vaseline','skin-care',8.90,14,1,'cocoa body lotion 身体乳','19'],
-  ['Carefree Panty Liners','Carefree','personal-care',4.20,25,2,'liners hygiene 护垫','14'],
-  ['Kotex Liners Daily Protect','Kotex','personal-care',4.90,8,1,'liners hygiene 护垫','display'],
-  ['Silky Smooth Shampoo','Sunsilk','hair-care',9.90,27,1,'shampoo hair wash 洗发水 洗头水'],
-  ['Anti-Dandruff Shampoo','Head & Shoulders','hair-care',12.50,17,1,'shampoo dandruff h&s 海飞丝 洗发水'],
-  ['Nourishing Conditioner','Pantene','hair-care',11.90,8,1,'conditioner 护发素'],
-  ['Fresh Mint Toothpaste','Colgate','oral-care',4.90,56,2,'toothpaste dental 牙膏 高露洁'],
-  ['Multi Care Toothpaste','Darlie','oral-care',5.80,23,1,'toothpaste 牙膏 黑人牙膏'],
-  ['All Purpose Surface Spray','Magiclean','home-cleaning',7.90,24,1,'cleaner 清洁剂'],
-  ['Dishwashing Liquid','Mama Lemon','home-cleaning',4.20,45,1,'dish soap 洗碗液'],
-  ['Fresh Laundry Liquid','Attack','laundry',13.90,21,1,'detergent 洗衣液'],
-  ['Fabric Softener','Downy','laundry',10.50,10,1,'softener 柔顺剂'],
-  ['Soft Facial Tissue Box','Kleenex','paper-tissues',5.90,49,2,'tissue paper 纸巾'],
-  ['Gentle Baby Wipes','Pigeon','baby-family',7.50,26,1,'baby wipes 婴儿湿巾'],
-  ['Baby Bath Wash','Johnson’s','baby-family',8.90,7,1,'baby wash 婴儿沐浴露'],
-  ['Golden Honey','Naturel','food-pantry',9.90,16,1,'honey 蜂蜜'],
-  ['Instant Oatmeal','Quaker','food-pantry',5.90,22,1,'oats 燕麦'],
-  ['Butter Cookies','Khong Guan','snacks-drinks',4.90,34,1,'cookies biscuit 饼干'],
-  ['Chocolate Malt Drink','Milo','snacks-drinks',7.90,28,1,'drink milo 美禄'],
-  ['Reusable Shopping Bag','CP Value Mart','others',4.50,50,1,'bag 购物袋']
 ];
 export const cash = cents => 'S$' + (cents / 100).toFixed(2);
 export const escape = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
@@ -46,30 +21,9 @@ export const imageUrl = value => {
 };
 
 function demoData() {
-  const products = seeds.map(([name,brand,category,price,units,min,keywords,photo], i) => {
-    const sku = 'CP-' + String(101+i);
-    return {
-      id: sku, sku, name, brand, category, keywords, status:'Published', featured:i<8,
-      description: name + ' from ' + brand + '. Choose a pack size to see the price, minimum quantity and availability.',
-      image:photo ? 'assets/'+photo+'.webp' : '', original:photo ? 'CP Value Mart product '+photo+'.png' : '',
-      r2:photo ? 'products/'+sku.toLowerCase()+'/main.webp' : '',
-      variants:[
-        {sku:sku+'-01',name:'Standard',price:Math.round(price*100),stock:units,min},
-        {sku:sku+'-02',name:'Value Pack',price:Math.round(price*1.8*100),stock:Math.floor(units/2),min:1}
-      ]
-    };
-  });
-  const orders = ['Processing','Shipped','Delivered'].map((status, i) => {
-    const product=products[i], variant=product.variants[0], subtotal=variant.price;
-    return {
-      id:'CVM-104'+(i+1),date:'2026-11-'+(15+i),name:['Amelia Tan','Daniel Lim','Sarah Lee'][i],
-      address:'Demo address',postal:'123456',email:'sample'+i+'@example.test',status,tracking:i?'SG-DEMO-100'+i:'',
-      items:[{productId:product.id,sku:variant.sku,name:product.name,option:variant.name,qty:1,price:subtotal}],
-      totals:{subtotal,shipping:390,discount:0,total:subtotal+390}
-    };
-  });
+  const products = structuredClone(catalogProducts);
   return {
-    products,orders,cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
+    products,orders:[],cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
     settings:{shipping:390,threshold:5000,support:'hello@cpvaluemart.com'},
     coupons:[
       {code:'WELCOME5',type:'percent',amount:5,min:2000,active:true},
@@ -77,9 +31,10 @@ function demoData() {
     ]
   };
 }
-const key='cvm-preview-2026-v2';
+const key='cvm-preview-13m-20261118-v1';
 export let state;
 try {
+  localStorage.removeItem('cvm-preview-2026-v2');
   const stored=JSON.parse(localStorage.getItem(key));
   state=stored?.products && stored?.settings && stored?.orders ? stored : demoData();
 } catch { state=demoData(); }
@@ -233,7 +188,7 @@ export function saveBuyerReview(id,sku,rating,comment) {
 export function matching(query) {
   const terms=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   return state.products.filter(p=>{
-    const text=[p.name,p.brand,categoryName(p.category),p.keywords,p.sku,...p.variants.map(v=>v.sku)].join(' ').toLowerCase();
+    const text=[p.name,p.brand,categoryName(p.category),p.keywords,p.sku,...p.variants.flatMap(v=>[v.sku,v.name])].join(' ').toLowerCase();
     return p.status==='Published'&&terms.every(term=>text.includes(term));
   });
 }

@@ -296,7 +296,7 @@ document.addEventListener('visibilitychange',()=>{
 window.addEventListener('pageshow',()=>{if(refreshReceipts()) render();});
 window.addEventListener('hashchange',()=>{if(imageDialog.open)imageDialog.close();if(modal.open)modal.close();render({scroll:true});});
 window.addEventListener('storage',event=>{
-  if(event.key==='cvm-preview-2026-v2'&&event.newValue) {
+  if(event.key==='cvm-preview-13m-20261118-v1'&&event.newValue) {
     try {Object.assign(state,JSON.parse(event.newValue));render();} catch {}
   }
 });

@@ -210,7 +210,7 @@ function settingsPage() {
   return heading('Settings','Delivery rules apply immediately to the storefront.')+
     '<form class="panel form-stack narrow" id="settings-form"><h2>Singapore delivery</h2>'+amountInput('Standard delivery charge (SGD)','shipping',state.settings.shipping)+
     amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>'+
-    '<section class="panel narrow reset-panel"><h2>Reset demo data</h2><p>Restore the sample products, stock, coupons and orders for this browser.</p><button class="btn outline" data-reset>Reset preview</button></section>';
+    '<section class="panel narrow reset-panel"><h2>Reset demo data</h2><p>Restore the imported products and initial stock; clear simulated orders in this browser.</p><button class="btn outline" data-reset>Reset preview</button></section>';
 }
 export function adminPage(page,id,params) {
   let body;
