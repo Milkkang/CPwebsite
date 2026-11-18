@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+const storage = new Map();
+globalThis.localStorage = {getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
+const {state}=await import('../dist/store.js');
+const {updateInlineProduct,updateInlineStatus,storeProduct,productEditor}=await import('../dist/admin.js');
+const p=state.products[0], v=p.variants[0];
+assert.equal(updateInlineProduct('name',v.sku,'Updated 250g'),undefined);
+assert.ok(p.name.endsWith(' · Updated 250g'));
+assert.equal(updateInlineProduct('price',v.sku,'5.25'),undefined);
+assert.equal(v.price,525);
+assert.equal(updateInlineProduct('min',v.sku,'4'),undefined);
+assert.equal(v.min,4);
+for(const [field,value] of [['name',''],['price','-1'],['price','2.555'],['min','0'],['min','1.5']]) assert.equal(typeof updateInlineProduct(field,v.sku,value),'string');
+assert.equal(v.price,525); assert.equal(v.min,4);
+assert.equal(updateInlineStatus(p.id,'Draft'),undefined);
+assert.equal(p.status,'Draft');
+const persisted=JSON.parse([...storage.values()][0]).products.find(row=>row.id===p.id);
+assert.equal(persisted.variants[0].name,'Updated 250g');
+assert.equal(persisted.variants[0].price,525);
+assert.equal(persisted.variants[0].min,4);
+assert.equal(persisted.status,'Draft');
+function edit(image,variantImage) {
+ const values=new FormData();
+ for(const [key,value] of Object.entries({sku:p.sku,name:p.name,brand:p.brand,category:p.category,status:p.status,description:p.description,keywords:p.keywords,image,variantName:v.name,variantSku:v.sku,variantPrice:'5.25',variantStock:'100',variantMin:'4',variantImage})) values.set(key,value);
+ return storeProduct({dataset:{id:p.id}},values);
+}
+assert.equal(edit('https://example.com/replacement.jpg',v.image??''),undefined);
+let saved=state.products.find(row=>row.id===p.id);
+assert.equal(saved.image,'https://example.com/replacement.jpg');
+assert.equal(saved.r2,saved.image);
+assert.equal(saved.variants[0].image,saved.image);
+assert.equal(edit('https://example.com/listing.jpg','https://example.com/explicit-variant.jpg'),undefined);
+saved=state.products.find(row=>row.id===p.id);
+assert.equal(saved.image,'https://example.com/explicit-variant.jpg');
+assert.ok(!productEditor(p.id).includes('Image references'));
+assert.match(productEditor(p.id),/R2 image URL/);
+assert.ok(!productEditor('new').includes('<fieldset'));
+console.log('PASS: inline persistence and validation; R2 replacement; explicit variant override; editor fields');
