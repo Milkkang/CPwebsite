@@ -25,6 +25,7 @@ test('address list labels the default and offers selection only for other addres
   {id:'address-b',full_name:'Second',address_line:'Test B',postal_code:'000002',is_default:false}
  ]});
  try{await loadAddresses();}finally{globalThis.fetch=original;}
- const html=addressesPanel();assert.equal(html.split('Default delivery address').length-1,1);
+ const html=addressesPanel();assert.equal(html.split('>Default</strong>').length-1,1);
  assert.equal(html.includes('data-default-address="address-a"'),false);assert.ok(html.includes('data-default-address="address-b"'));
+ assert.ok(html.includes('>Set default</button>'));assert.equal(html.includes('Press +'),false);
 });

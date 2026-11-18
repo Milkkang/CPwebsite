@@ -86,3 +86,13 @@ Supabase security advisor 无 ERROR/WARN；6 个 INFO 为 server_sessions/auth_r
 - 外键删除只置空 default_address_id，保留 user_id；依据 PostgreSQL 17 [列级 SET NULL](https://www.postgresql.org/docs/17/ddl-constraints.html)。
 
 新增本地单元检查后共 20 项通过；真实 workerd 构建/检查通过。数据库默认选择/切换/删除回退/跨用户拒绝测试与正式部署待补充。真实密码重置和退出验收仍未完成，不进入 Phase 4。
+
+### 2026-11-18 续验
+
+- 账户页同宽列出 Account details、Delivery addresses、Change password；非默认地址右上角为 Set default，默认项为 Default，新增地址有独立 Add address 入口，空列表显示提示。旧 `?mode=addresses` 进入同一账户设置页。
+- Supabase 迁移记录含 `20261118112452`，未重复执行。以 `.invalid` 合成身份运行 `phase-3-default-address-verification.sql` 后返回 PASS，事务回滚；覆盖首次默认、单一默认、切换、跨账户拒绝、删除回退、旧版删除兼容和 RPC 权限。未读取或修改真实地址内容。
+- 本地 22 项 API/UI/安全测试通过，前台回归和构建通过；两个真实 workerd 运行时测试通过。错误旧密码不更改密码、不删除站点会话；正确密码更改会删除站点会话并清 Cookie 的行为由模拟上游测试覆盖。真实密码仍由用户验收。
+- Supabase 安全建议为 6 个受 RLS 保护且故意没有公开 policy 的内部表 INFO，另有一项 Free 套餐不支持的泄露密码检查 WARN：[密码安全说明](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection)。
+- 数据影响：已应用的迁移只增加默认指针并为既有账户选择最早保存地址；本轮 SQL 检查全部回滚。代码恢复应回退到上一个通过真实鉴权验收的 Worker 版本；数据库保留兼容的默认地址字段和 RPC。
+
+待记录最新 PR CI、合并提交、Worker 版本、正式域名核验、桌面和手机人工结果以及真实退出、账户页改密、邮件恢复。Phase 3 尚未批准。

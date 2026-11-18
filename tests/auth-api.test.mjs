@@ -100,3 +100,40 @@ test('default address mutations derive ownership from the session and reject ano
   assert.equal((await run('/api/addresses/'+id,{action:'default',user_id:'another-user'},{cookie})).status,400);
  });
 });
+
+test('wrong current password keeps the website session and never updates the password',async()=>{
+ const cookie='__Host-cvm-session='+'e'.repeat(64);let changed=false,deleted=false;
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:false,recoveryOnly:false});
+  if(url.includes('consume_auth_limit'))return Response.json(true);
+  if(url.includes('/auth/v1/token'))return Response.json({msg:'Invalid login credentials'},{status:400});
+  if(options.method==='PUT'&&url.includes('/auth/v1/user'))changed=true;
+  if(options.method==='DELETE'&&url.includes('server_sessions'))deleted=true;
+  throw Error('Unexpected request');
+ },async()=>{
+  const r=await run('/api/auth/password',{currentPassword:'incorrect',password:'new-password-1234'},{cookie});
+  assert.equal(r.status,400);assert.equal((await r.json()).error.code,'CURRENT_PASSWORD_INCORRECT');
+  assert.equal(r.headers.get('set-cookie'),null);assert.equal(changed,false);assert.equal(deleted,false);
+  assert.equal((await run('/api/admin/access',undefined,{cookie})).status,403);
+ });
+});
+
+test('correct current password updates it and revokes website sessions',async()=>{
+ const cookie='__Host-cvm-session='+'f'.repeat(64),encrypted=await encrypt(token,env);let changed=false,deleted=false,loggedOut=false;
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json(deleted?null:{account,isAdmin:false,recoveryOnly:false});
+  if(url.includes('consume_auth_limit'))return Response.json(true);
+  if(url.includes('/auth/v1/token'))return Response.json({access_token:token,user:{id:userId}});
+  if(url.includes('/auth/v1/logout')){loggedOut=true;return Response.json({});}
+  if(url.includes('server_sessions')&&options.method==='DELETE'){deleted=true;return Response.json([]);}
+  if(url.includes('server_sessions'))return Response.json([{access_token_encrypted:encrypted}]);
+  if(url.includes('/auth/v1/user')&&options.method==='PUT'){changed=true;assert.equal(JSON.parse(options.body).password,'new-password-1234');return Response.json({id:userId});}
+  throw Error('Unexpected request');
+ },async()=>{
+  const r=await run('/api/auth/password',{currentPassword:'old-password',password:'new-password-1234'},{cookie});
+  assert.equal(r.status,200);assert.ok(r.headers.get('set-cookie').includes('Max-Age=0'));
+  assert.equal(changed,true);assert.equal(deleted,true);assert.equal(loggedOut,true);
+  assert.equal((await run('/api/auth/session',undefined,{cookie})).status,200);
+  assert.equal((await (await run('/api/auth/session',undefined,{cookie})).json()).account,null);
+ });
+});

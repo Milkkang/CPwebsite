@@ -99,6 +99,7 @@ export async function handleAuth(request,env) {
  }
  const who=await identity(request,env,{allowRecovery:path==='/api/auth/password'});
  if(path==='/api/auth/password'&&!read){const data=await bodyJSON(request);const pass=password(data);await limit(request,env,'password',who.account.id);
+  if(!who.recoveryOnly){const currentPassword=field(data,'currentPassword',1,128);const check=await upstream(env,'/auth/v1/token?grant_type=password',{method:'POST',body:{email:who.account.email,password:currentPassword},allowFailure:true});if(!check.ok||check.data?.user?.id!==who.account.id)throw new ApiError(400,'CURRENT_PASSWORD_INCORRECT','Your current password is incorrect.');try{await upstream(env,'/auth/v1/logout?scope=local',{method:'POST',token:check.data.access_token,allowFailure:true});}catch{}}
   const row=await db(env,'server_sessions?'+new URLSearchParams({select:'access_token_encrypted',session_hash:'eq.'+who.sessionHash}));if(!row.data?.[0])throw new ApiError(401,'SIGN_IN_REQUIRED','Please sign in again.');
   const token=await decrypt(row.data[0].access_token_encrypted,env);const changed=await upstream(env,'/auth/v1/user',{method:'PUT',token,body:{password:pass},allowFailure:true});if(!changed.ok)throw new ApiError(400,'PASSWORD_UPDATE_FAILED','Password could not be changed. Use a new password or request another reset link.');
   await db(env,'server_sessions?'+new URLSearchParams({user_id:'eq.'+who.account.id}),{method:'DELETE'});try{await upstream(env,'/auth/v1/logout?scope=global',{method:'POST',token,allowFailure:true});}catch{}
