@@ -15,7 +15,7 @@ export function setAuthListener(fn){onAuthChange=fn;channel?.addEventListener('m
 export async function authRequest(path,data) {
  const r=await fetch(path,{method:data===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',headers:data===undefined?{}:{'Content-Type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
  let body;try{body=await r.json();}catch{throw Error('Account service is unavailable. Please try again.');}
- if(!r.ok){if(r.status===401){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}throw Error(body.error?.message??'Request failed. Please try again.');}
+ if(!r.ok){if(r.status===401){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;throw error;}
  return body;
 }
 export async function refreshSession() {
@@ -45,7 +45,9 @@ export async function submitAuth(form,fields) {
  const action=form.id.slice(5);
  if(action==='password'&&fields.password!==fields.confirmPassword)throw Error('Passwords do not match.');
  const path=action==='profile'?'/api/profile':action==='address'?'/api/addresses':'/api/auth/'+action;
- const result=await authRequest(path,action==='verify'?callback:fields);
+ let result;
+ try{result=await authRequest(path,action==='verify'?callback:fields);}
+ catch(error){if(action==='verify'&&error.code==='INVALID_LINK'){callback=null;history.replaceState(null,'','/#/account?mode=invalid');onAuthChange();}throw error;}
  if(action==='verify')callback=null;
  if(['login','verify','password','profile'].includes(action)){channel?.postMessage('changed');await refreshSession();}
  if(action==='address')await loadAddresses();
