@@ -74,3 +74,15 @@ Supabase security advisor 无 ERROR/WARN；6 个 INFO 为 server_sessions/auth_r
 正式入口：[注册](https://cpvaluemart.com/#/account?mode=register)、[登录](https://cpvaluemart.com/#/account)、[密码重置请求](https://cpvaluemart.com/#/account?mode=recover)。
 
 用户在正式注册页自行填写姓名和 12–128 字符密码并提交，验收仅用 milkkang93@gmail.com，不把密码或令牌发到聊天。邮件真实送达并完成邮箱验证后，再核验 Auth verified 状态并授予首位管理员；随后完成登录刷新、退出、资料地址保存、重置邮件与用户自行改密。尚未完成这些人工验收项，不请求 Approved Phase 3。
+
+## 验收中修正：默认配送地址
+
+用户已确认后台可进入、资料保存后刷新保留；注册/登录成功且验证邮件收到。数据库已核实指定邮箱 verified，管理员角色已授予该验证用户；Resend 验证邮件 delivered（ID 01a1edab-4ecb-758f-b96e-4e132e1453d5）。地址验收发现缺少默认项，已在 Phase 3 内补充：
+
+- 首条地址自动默认；既有多地址选择最早保存的一条；默认项显示 Default delivery address，其他项有 Set as default。
+- 默认选择保存在 buyer_profiles.default_address_id；复合外键保证只能指向同一买家的地址。单个指针确保最多一个默认项，读取在同一快照中计算标记并优先显示默认项。
+- 地址新增/切换/删除用 service-only SECURITY INVOKER RPC，在买家资料行加锁后原子变更。删除默认项自动提升下一条，删除最后一条后为空；保留旧 Worker 直接删除兼容。
+- 现有地址内容不修改、不删除。前端不自行决定默认状态，刷新以 API 结果为准。配送结账接通后使用该默认项，当前仍未开放交易。
+- 外键删除只置空 default_address_id，保留 user_id；依据 PostgreSQL 17 [列级 SET NULL](https://www.postgresql.org/docs/17/ddl-constraints.html)。
+
+新增本地单元检查后共 20 项通过；真实 workerd 构建/检查通过。数据库默认选择/切换/删除回退/跨用户拒绝测试与正式部署待补充。真实密码重置和退出验收仍未完成，不进入 Phase 4。

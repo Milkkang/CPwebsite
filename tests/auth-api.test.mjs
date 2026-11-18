@@ -87,3 +87,16 @@ test('signup confirmation verifies email without creating a login session from t
   assert.equal(r.status,200);assert.equal((await r.json()).requiresLogin,true);assert.equal(r.headers.get('set-cookie'),null);assert.equal(websiteSessionWritten,false);
  });
 });
+
+test('default address mutations derive ownership from the session and reject another owner',async()=>{
+ const cookie='__Host-cvm-session='+'d'.repeat(64),id='88888888-8888-4888-8888-888888888888';let seen;
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:false,recoveryOnly:false});
+  if(url.includes('change_member_address')){seen=JSON.parse(options.body);return Response.json(null);}
+  throw Error('Unexpected request');
+ },async()=>{
+  const r=await run('/api/addresses/'+id,{action:'default'},{cookie});assert.equal(r.status,404);
+  assert.deepEqual(seen,{p_user_id:userId,p_action:'default',p_address_id:id});
+  assert.equal((await run('/api/addresses/'+id,{action:'default',user_id:'another-user'},{cookie})).status,400);
+ });
+});
