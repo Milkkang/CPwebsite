@@ -73,3 +73,17 @@ test('invalid links and upstream auth errors never return token/password/SMTP de
   assert.equal((await run('/api/auth/verify',{token_hash:'bad',type:'admin'})).status,400);
  });
 });
+
+test('signup confirmation verifies email without creating a login session from the link',async()=>{
+ let websiteSessionWritten=false;
+ await mocked(async(url,options)=>{
+  if(url.includes('consume_auth_limit'))return Response.json(true);
+  if(url.includes('/auth/v1/verify'))return Response.json({access_token:token});
+  if(url.includes('/auth/v1/user'))return Response.json({id:userId,email:account.email,email_confirmed_at:new Date().toISOString()});
+  if(url.includes('/auth/v1/logout'))return new Response(null,{status:204});
+  websiteSessionWritten=true;throw Error('Unexpected website session creation');
+ },async()=>{
+  const r=await run('/api/auth/verify',{token_hash:'c'.repeat(64),type:'email'});
+  assert.equal(r.status,200);assert.equal((await r.json()).requiresLogin,true);assert.equal(r.headers.get('set-cookie'),null);assert.equal(websiteSessionWritten,false);
+ });
+});
