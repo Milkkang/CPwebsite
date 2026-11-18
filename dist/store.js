@@ -69,8 +69,10 @@ try {
     save();
   }
 } catch { state=demoData(); }
+// Browser preview identities are never trusted as authenticated users.
+state.account=null;
 export function save() {
-  try { localStorage.setItem(key,JSON.stringify(state)); } catch {}
+  try { localStorage.setItem(key,JSON.stringify({...state,account:null})); } catch {}
 }
 export function reset() { state=demoData(); save(); }
 export function findProduct(id) { return state.products.find(p=>p.id===id); }

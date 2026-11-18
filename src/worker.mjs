@@ -1,3 +1,4 @@
+import { authRoute, handleAuth } from './auth-api.mjs';
 import { ApiError, catalogRoute, readCatalog } from './catalog-api.mjs';
 
 function json(body, status, requestId, extra = {}) {
@@ -11,16 +12,29 @@ function json(body, status, requestId, extra = {}) {
 export default {
   async fetch(request, env) {
     const pathname = new URL(request.url).pathname;
+    if (['/auth/confirm','/auth/reset'].includes(pathname)) {
+      if(request.method!=='GET'&&request.method!=='HEAD') return new Response('Method not allowed',{status:405,headers:{Allow:'GET, HEAD'}});
+      const asset=await env.ASSETS.fetch(new Request(new URL('/index.html',request.url),request));
+      const response=new Response(asset.body,asset);
+      response.headers.set('Cache-Control','no-store');
+      response.headers.set('Referrer-Policy','no-referrer');
+      response.headers.set('X-Content-Type-Options','nosniff');
+      response.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://pub-aff260a936bf43069b7b2903e0af2f9c.r2.dev data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+      return response;
+    }
     if (pathname !== '/api' && !pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     const requestId = crypto.randomUUID();
     const start = performance.now();
     let response;
-    const route = catalogRoute(pathname);
+    const route = authRoute(pathname) ? 'account-api' : catalogRoute(pathname);
     try {
       if (pathname === '/api/health') {
         response = ['GET', 'HEAD'].includes(request.method)
-          ? json({ ok: true, service: 'cpvaluemart-api', phase: 2 }, 200, requestId)
+          ? json({ ok: true, service: 'cpvaluemart-api', phase: 3 }, 200, requestId)
           : json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } }, 405, requestId, { Allow: 'GET, HEAD' });
+      } else if (route === 'account-api') {
+        const result=await handleAuth(request,env);
+        response=json(result.data,result.status,requestId,result.headers);
       } else if (route) {
         response = json(await readCatalog(request, env, route), 200, requestId);
       } else {

@@ -1,3 +1,4 @@
+import {auth,authForms,adminGate,profilePanel,addressesPanel,loadAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
 import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,makeOrder,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
@@ -54,7 +55,7 @@ function route() {
   } else if(privateBuyerRoutes.has(section)) {
     destination=section;
   }
-  if(!state.account&&privateBuyerRoutes.has(destination)) {
+  if(!state.account&&!auth.loading&&privateBuyerRoutes.has(destination)) {
     params={next:href(destination,params).slice(1)};
     destination='/account';
   }
@@ -64,10 +65,12 @@ function route() {
 function returnAfterSignIn(next) {
   const [path,qs='']=next.split('?');
   if(path==='checkout'||path==='/checkout') return navigate('/checkout');
+  if(path==='/admin'&&auth.isAdmin)return navigate('/admin');
   if(privateBuyerRoutes.has(path)) return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
   navigate('/account');
 }
 function render({scroll=false}={}) {
+  state.account=auth.account&&!auth.recoveryOnly?auth.account:null;
   refreshReceipts();
   const {path,params}=route();
   const [key='',id='',object='']=path.replace(/^\//,'').split('/');
@@ -75,7 +78,8 @@ function render({scroll=false}={}) {
   const productView=key==='product'?path+'?'+(params.get('sku')??''):'';
   if(key!=='cart') repurchaseResult=null;
   let body='';
-  if(admin) body=adminPage(id,object,params);
+  if(auth.loading&&privateBuyerRoutes.has(path))body='<section class="panel narrow"><h1>My account</h1><p role="status">Checking your session…</p></section>';
+  else if(admin) body=auth.isAdmin&&!auth.recoveryOnly?adminPage(id,object,params):adminGate();
   else {
     switch(key) {
       case '': body=home();break;
@@ -89,7 +93,7 @@ function render({scroll=false}={}) {
       }
       case 'cart': body=cart(repurchaseResult);break;
       case 'checkout': body=checkout();break;
-      case 'account': body=account(params);break;
+      case 'account': body=authForms(params)??(params.get('mode')==='addresses'?addressesPanel():account(params)+profilePanel());break;
       case 'orders': body=orders(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
       case 'confirmation': body=confirmation(params);break;
@@ -125,11 +129,30 @@ function showModal(content) {
 const cleanParams = obj => Object.fromEntries(Object.entries(obj).filter(([,v])=>typeof v==='string'&&v.trim()).map(([k,v])=>[k,v.trim()]));
 let csvToImport, repurchaseResult;
 
-document.addEventListener('submit', event=>{
+document.addEventListener('submit', async event=>{
   const form=event.target;
   if(!form.id) return;
   event.preventDefault();
   const data=new FormData(form), f=Object.fromEntries(data);
+  if(form.id.startsWith('auth-')) {
+    const button=event.submitter??form.querySelector('button');if(button?.disabled)return;
+    if(button)button.disabled=true;
+    const status=form.querySelector('#auth-status');if(status){status.hidden=false;status.textContent='Please wait…';}
+    try {
+      const result=await submitAuth(form,f);
+      if(form.id==='auth-login')returnAfterSignIn(form.dataset.next??'');
+      else if(form.id==='auth-password'){navigate('/account');message(result.message);}
+      else if(form.id==='auth-verify'){navigate('/account');message(result.recoveryOnly?'Choose your new password.':'Your email is verified.');}
+      else if(form.id==='auth-profile')message('Name saved.');
+      else if(form.id==='auth-address')message('Address saved.');
+      else if(status){status.hidden=false;status.textContent=result.message;}
+      if(['auth-signup','auth-recover','auth-resend'].includes(form.id))form.querySelectorAll('input[type=password]').forEach(input=>input.value='');
+    } catch(error){if(status?.isConnected){status.hidden=false;status.textContent=error.message;}else message(error.message);}
+    finally {if(button?.isConnected)button.disabled=false;}
+    return;
+  }
+  if(location.hash.startsWith('#/admin')) {try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
+
   let error;
   switch(form.id) {
     case 'search-form': {
@@ -155,9 +178,7 @@ document.addEventListener('submit', event=>{
       state.coupon=code;save();render();message(code?'Coupon applied.':'Coupon cleared.');break;
     }
     case 'account-form':
-      if(!f.name.trim()) {error='Enter a shopper name.';break;}
-      state.account={name:f.name.trim(),email:f.email.trim().toLowerCase()};save();
-      returnAfterSignIn(form.dataset.next);break;
+      error='Use the secure sign-in form.';break;
     case 'checkout-form': {
       if(!f.name.trim()||!f.address.trim()) {error='Enter a name and sample delivery address.';break;}
       const result=makeOrder({...f,name:f.name.trim(),address:f.address.trim()});
@@ -201,6 +222,9 @@ document.addEventListener('click', async event=>{
   const button=event.target.closest('button');
   if(!button) return;
   const data=button.dataset;
+  if('authRetry'in data){await refreshSession();return;}
+  if('deleteAddress'in data){try{await authRequest('/api/addresses/'+data.deleteAddress,{action:'delete'});await loadAddresses();}catch(error){message(error.message);}return;}
+  if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
   if('imagePreview' in data) openImage(button);
   else if('closeImage' in data) imageDialog.close();
   else if('save' in data) {
@@ -231,12 +255,8 @@ document.addEventListener('click', async event=>{
     const error=setCart(sku,qty);
     if(error) message(error); else render();
   } else if('remove' in data) {setCart(data.remove,0);render();}
-  else if('signOut' in data) {state.account=null;save();render();message('Signed out.');}
-  else if('demoLogin' in data) {
-    const form=button.form;
-    form.elements.name.value='Sample Shopper';
-    form.elements.email.value='shopper@example.test';form.requestSubmit();
-  } else if('receiveOrder' in data) {
+  else if('signOut' in data) {try{await signOut();navigate('/account');message('Signed out.');}catch(error){message(error.message);}}
+  else if('receiveOrder' in data) {
     const error=confirmBuyerReceipt(data.receiveOrder);
     if(error) message(error);
     else {navigate('/orders',{view:'receive',stage:'delivered'});message('Order received. You can rate it in To Rate.');}
@@ -282,6 +302,7 @@ document.addEventListener('input',event=>{
 });
 document.addEventListener('change',async event=>{
   const input=event.target;
+  if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
   if(input.dataset.inline) {
     const error=updateInlineProduct(input.dataset.inline,input.dataset.sku,input.value);
     if(error) {message(error);input.value=input.defaultValue;return;}
@@ -311,13 +332,15 @@ document.addEventListener('change',async event=>{
   }
 });
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'&&refreshReceipts()) render();
+  if(document.visibilityState==='visible'){refreshSession();if(refreshReceipts())render();}
 });
-window.addEventListener('pageshow',()=>{if(refreshReceipts()) render();});
+window.addEventListener('pageshow',event=>{if(event.persisted)refreshSession();if(refreshReceipts())render();});
 window.addEventListener('hashchange',()=>{if(imageDialog.open)imageDialog.close();if(modal.open)modal.close();render({scroll:true});});
 window.addEventListener('storage',event=>{
   if(event.key==='cvm-preview-13m-20261118-v1'&&event.newValue) {
-    try {Object.assign(state,JSON.parse(event.newValue));render();} catch {}
+    try {Object.assign(state,JSON.parse(event.newValue),{account:null});render();} catch {}
   }
 });
+setAuthListener(()=>render());
 render();
+refreshSession();

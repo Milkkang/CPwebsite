@@ -7,6 +7,6 @@ for (const name of await readdir('dist')) {
 const config = JSON.parse(await readFile(root + 'worker.config.json', 'utf8'));
 assert.equal(config.name, 'cpwebsite');
 assert.equal(config.env.ASSETS.type, 'assets');
-assert.deepEqual(config.assets.runWorkerFirst, ['/api', '/api/*']);
+assert.deepEqual(config.assets.runWorkerFirst, ['/api', '/api/*', '/auth/confirm', '/auth/reset']);
 assert.equal(config.observability.redactQueryString, true);
 console.log('PASS: storefront asset bytes, Worker target, asset binding and API routing');
