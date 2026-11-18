@@ -32,9 +32,9 @@ GET/POST /api/profile；GET/POST /api/addresses；POST /api/addresses/:id（acti
 | 项目 | 状态 |
 | --- | --- |
 | 单元/原商品回归 | 本地 16 项 + 原商品回归通过 |
-| 真实 Workers 运行时 | 待确认 |
-| 数据库 RLS / 双用户 / 撤销 | 待执行 |
-| GitHub 分支检查 | 待执行 |
+| 真实 Workers 运行时 | 通过：目录请求、重定向拒绝、Auth AES-GCM 会话、回调 HTML/安全响应头两项 workerd 测试 |
+| 数据库 RLS / 双用户 / 撤销 | 通过：迁移 20261118074149；两用户隔离、禁止转移所有权、metadata 伪管理员无效、私有会话不可读、Auth 撤销后旧 JWT 无效、限流；夹具全部回滚 |
+| GitHub 分支检查 | 首轮通过 [Actions 44260687108](https://github.com/Milkkang/CPwebsite/actions/runs/44260687108)，最终迁移文件名与远端记录对齐 |
 | 正式域名部署与桌面/手机 | 待执行 |
 | 注册真实送达及验证 | 待用户自行输入密码，测试只发 milkkang93@gmail.com |
 | 错误/过期链接及错误密码 | 待线上验收 |
@@ -48,3 +48,11 @@ GET/POST /api/profile；GET/POST /api/addresses；POST /api/addresses/:id（acti
 阶段前 GitHub main 962a33a0708677283797e06299ef080c3ecf0eb8；Phase 2 Worker 1e785bba-13f8-40e5-aa31-ef22f548320a（后续记录含当前 Secret 的回退点）。旧阶段模拟后台没有真实写 API，但回退会恢复原预览登录行为；不将回退作为安全鉴权替代方案。数据库新增表可以保留，不 DROP，不清除会员数据；关闭新注册或回退需保留已有账号及邮件设置记录。
 
 本阶段不代表订单/收藏/购物车已跨设备同步。Supabase Free 独立备份及 Phase 1 构建依赖告警仍按此前报告记录。
+
+## 当前检查证据
+
+本机 Chrome 已确认新登录和注册表单正常显示，未登录访问后台被拦截；无效回调显示重发入口，地址栏 TokenHash 已移除。未在本机开发环境配置生产密钥，也未在开发环境提交注册。
+
+Supabase security advisor 无 ERROR/WARN；6 个 INFO 为 server_sessions/auth_rate_limits 及此前私有表明确采用 RLS 默认拒绝、无客户端策略，不增加读取策略消除提示。[检查说明](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)。
+
+已记录阶段前仍含最新服务端 Secret 的 Worker 恢复点 82e52f9a-3bfc-4150-a634-f4bce80b2e09，原 deployment 9761ed17-6775-45cc-aaf6-c1813eab9836。
