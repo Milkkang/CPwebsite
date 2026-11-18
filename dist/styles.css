@@ -507,3 +507,5 @@ button.photo:disabled {opacity:1;cursor:default}
 .pagination-links {display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .pagination-links [aria-disabled="true"] {opacity:.45}
 @media(max-width:600px){.catalog-pagination {align-items:flex-start;flex-direction:column}.pagination-links .btn {width:auto;min-height:44px}}
+
+.account-settings{margin-top:14px}.account-settings .form-stack{gap:12px}.account-settings .form-stack>.btn{justify-self:start}.account-address-list{display:grid;gap:12px;margin:16px 0}.address-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.address-heading h3{margin:0}.address-default{white-space:nowrap}.add-address summary{cursor:pointer;display:list-item;list-style:none;padding:12px 0}.add-address .form-stack{margin-top:12px}

@@ -1,4 +1,4 @@
-import {auth,authForms,adminGate,profilePanel,addressesPanel,loadAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
+import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
 import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,makeOrder,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
@@ -93,7 +93,7 @@ function render({scroll=false}={}) {
       }
       case 'cart': body=cart(repurchaseResult);break;
       case 'checkout': body=checkout();break;
-      case 'account': body=authForms(params)??(params.get('mode')==='addresses'?addressesPanel():account(params)+profilePanel());break;
+      case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
       case 'orders': body=orders(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
       case 'confirmation': body=confirmation(params);break;
@@ -137,7 +137,7 @@ document.addEventListener('submit', async event=>{
   if(form.id.startsWith('auth-')) {
     const button=event.submitter??form.querySelector('button');if(button?.disabled)return;
     if(button)button.disabled=true;
-    const status=form.querySelector('#auth-status');if(status){status.hidden=false;status.textContent='Please wait…';}
+    const status=form.querySelector('[data-auth-status]');if(status){status.hidden=false;status.textContent='Please wait…';}
     try {
       const result=await submitAuth(form,f);
       if(form.id==='auth-login')returnAfterSignIn(form.dataset.next??'');
@@ -223,6 +223,7 @@ document.addEventListener('click', async event=>{
   if(!button) return;
   const data=button.dataset;
   if('authRetry'in data){await refreshSession();return;}
+  if('defaultAddress'in data){if(button.disabled)return;button.disabled=true;try{await authRequest('/api/addresses/'+data.defaultAddress,{action:'default'});await loadAddresses();message('Default delivery address saved.');}catch(error){button.disabled=false;message(error.message);}return;}
   if('deleteAddress'in data){try{await authRequest('/api/addresses/'+data.deleteAddress,{action:'delete'});await loadAddresses();}catch(error){message(error.message);}return;}
   if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
   if('imagePreview' in data) openImage(button);
