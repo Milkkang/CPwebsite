@@ -32,18 +32,18 @@
 | --- | --- |
 | 导入前字段与唯一性 | 通过，678 listing，无错误；stock 67800；MOQ 3 |
 | API/差异工具/前端单元回归 | 本地通过，11 项新旧单元测试及原商品回归 |
-| GitHub 分支自动检查 | 待执行 |
-| 正式迁移及重复导入 | 待执行 |
-| DB 数量/内容一致性及权限 | 待执行 |
+| GitHub 分支自动检查 | 首版通过 Actions 44253398412；导入脚本修复后的最终分支重测待确认 |
+| 正式迁移及重复导入 | 通过：远端迁移 20261118064358；重复执行 seed 后仍为 678 商品/678 库存流水 |
+| DB 数量/内容一致性及权限 | 通过：678/678 SKU 精确匹配全部 17 个源字段；0 差异；事务测试通过金额/MOQ/库存约束、匿名及会员越权拒绝；夹具回滚 |
 | 正式 API 筛选、排序、分页 | 待执行 |
 | 原前端保持正常 | 待执行 |
-| Supabase 安全/性能 advisors | 待执行 |
+| Supabase 安全/性能 advisors | 无 ERROR/WARN。安全 INFO 为四张私有表无策略（明确拒绝客户端访问）；性能 INFO 为四个新建索引尚未使用 |
 
 ## 恢复方式
 
 - 代码回退点：Phase 1 GitHub b8c6f50c63bb7c0dbdc6986b3a20c25233096f25；Phase 1 Worker edb7a92c-3ae0-480d-8e9d-a78e2cac1018。后者不含本阶段新增的 publishable Secret；回退不需要该 key，恢复 Phase 2 时保留/重加 Secret。
 - 数据库是增量新增，不删除旧数据。Worker 回退无需删除新表；前端从未切换数据源。
-- 迁移 SQL 在 supabase/migrations；MCP apply_migration 记录远端迁移历史。seed SQL 独立版本化且可重复运行；核验 SQL 在 supabase/phase-2-verification.sql，事务回滚全部测试夹具。
+- 迁移 SQL 在 supabase/migrations；MCP apply_migration 记录远端迁移历史。seed SQL 独立版本化且可重复运行；核验 SQL 在 supabase/phase-2-verification.sql，事务回滚全部测试夹具。`node scripts/migration/content-check.mjs` 生成全部字段精确对比 SQL（只读），预期 expected_rows=matched_skus=database_rows=ledger_rows=678，mismatched_rows=0。
 - 本阶段前 public schema 为空。若需在新的空项目重建：先应用迁移，再执行种子 SQL，再跑核验 SQL，检查报告数量/hash。不得在已有后续订单/库存变更后用本阶段初始 seed 当完整备份，也不得用 DROP TABLE 撤回代码。
 - 本阶段数据可由仓库种子完整重建；独立持续备份与恢复演练仍属于 Phase 8，不声称 Free 套餐自带生产备份。
 
@@ -52,3 +52,7 @@
 当前 678 行目录采用字面子串搜索；分类/品牌有索引。规模扩大后需按实际查询计划加入 trigram 或全文索引。未开放后台写入接口；管理员角色为空，Phase 3 仅授予已验证指定邮箱。尚无真实订单或会员。
 
 服务端 SUPABASE_SECRET_KEY、Resend/Stripe 运行凭据仍按 Phase 0 顺延记录，当前只读目录不需要它们；后续鉴权、支付、邮件阶段必须分别配置并验证。Stripe 维持 sandbox，未发邮件、未交易、未升级套餐。Phase 1 构建工具的已记录上游告警未因本阶段发生改变。
+
+## Advisor 说明
+
+私有表 RLS 无策略采用 PostgreSQL 默认拒绝语义，同时撤销 anon/authenticated 表权限；不为了消除提示增加读取策略。[RLS 无策略检查说明](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)。初始阶段小表/尚未启用后台流水查询，保留分类、品牌及外键索引，按后续真实负载复查，[未使用索引提示](https://supabase.com/docs/guides/database/database-linter?lint=0005_unused_index)。
