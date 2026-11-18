@@ -68,3 +68,16 @@ Apply the tracked migration before the seed; `supabase/phase-2-verification.sql`
 checks production constraints/RLS inside a rolled-back transaction. The browser
 export and read-only difference tool are in `scripts/migration/`. See
 `docs/phase-2-acceptance.md` for import boundaries, acceptance and recovery.
+
+## Phase 3 accounts (acceptance in progress)
+
+Email/password accounts are handled by Supabase Auth through the same-domain API.
+Runtime `SUPABASE_SECRET_KEY` is required; never add it to Builds or the browser.
+The browser receives an opaque HttpOnly session cookie, not Supabase tokens. Sessions
+last at most one hour; expiry requires sign-in again. Profile/address ownership and
+administrator access are checked on the server. TokenHash callbacks are served at
+`/auth/confirm` and `/auth/reset`; GET does not consume a link.
+
+Old browser-local identities are ignored. Shared product editing remains Phase 4;
+the simulated order submission is disabled until the real test checkout is ready.
+See `docs/phase-3-acceptance.md` for configuration, tests and remaining real-mail checks.
