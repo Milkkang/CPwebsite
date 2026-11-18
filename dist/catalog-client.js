@@ -30,3 +30,7 @@ export function catalogQuery(params, category='') {
   if (category) query.set('category',category);
   return '/api/products?'+query;
 }
+
+export function isNewProductView(product,current,previous) {
+  return Boolean(product&&current&&current!==previous);
+}

@@ -8,7 +8,8 @@ Status: **deployed; manual acceptance in progress**. A local follow-up commit is
 - GitHub Phase checks: run `44303655405` (run 44), success for the PR head.
 - Cloudflare Worker deployment `9e044223-f886-4534-b9dd-2b5286cde720`, version `2421e0ff-5f3e-4dfa-abf2-81db12d56712`, 100% as of 12:25:53 UTC on 2026-11-18.
 - Production domain: [cpvaluemart.com](https://cpvaluemart.com).
-- Local follow-up commit `49da143` adds Static Assets `Cache-Control: no-store` headers and allows the admin product-name field to retain every existing catalog name. It passes the full test and build suites but has not been published or deployed.
+- PR [#9](https://github.com/Milkkang/CPwebsite/pull/9) published the acceptance hotfix. Its head was `406abd75170c3a4f34140f37dd99146a3a959309`; GitHub Phase checks run `44411608177` (run 48) passed; merge commit `1114469b18e3a0ab3627b6ff674b3a6ea4c9c7f0` deployed as Worker deployment `1dea5ef1-cab4-4739-907e-181473d5a2f4`, version `3aed83ce-384f-431c-bd53-0baf8cd6ce60`, at 100%.
+- Local follow-up commit `56ec9dc` fixes recent-product recording after the asynchronous product detail has loaded. It passes 29 tests and the full build but is awaiting explicit publication approval.
 
 ## Data changes
 
@@ -21,7 +22,7 @@ Status: **deployed; manual acceptance in progress**. A local follow-up commit is
 
 ## Automated and read-only production checks
 
-- `npm test`: 28 tests pass, including API input and owner binding, admin actor and version handling, catalog mapping, facet and offers privileges.
+- `npm test`: 29 tests pass, including API input and owner binding, admin actor and version handling, catalog mapping, facet and offers privileges, and the product-detail loading transition used for recent history.
 - `npm run build`: pass.
 - `npm run test:runtime`: 2 real Worker runtime tests pass (the local loopback binding needed a sandbox exception).
 - Browser refresh on the production domain showed the new storefront banner, ten homepage products, 678 catalog products, 30/50/100 products per page, five desktop grid columns, and a product detail using API price, available stock and MOQ.
@@ -33,8 +34,8 @@ Status: **deployed; manual acceptance in progress**. A local follow-up commit is
 ## Manual acceptance
 
 1. **Passed:** a temporary homepage heading change was saved in the admin browser, appeared in the second browser after refresh, and was restored to the original text.
-2. **Blocked by stale browser assets:** the shopping API returned the new saved item for the verified member, while the second browser still rendered its old local saved list. The test saved item was removed again. The local follow-up commit prevents reuse of old unversioned scripts; repeat saved, recent and cart checks after deployment.
-3. **Pending:** guest cart merge on sign-in, including stock and published-status revalidation.
+2. **In progress:** the deployed cache fix loaded the current storefront in both browsers. A saved item and cart change reached the member shopping API, but opening a product detail did not write recent history. The cause was that the loading render marked the product as already viewed before API data arrived. Local commit `56ec9dc` fixes this state transition; repeat saved, recent and cart UI checks after deployment. The test saved item was removed and its cart quantity was restored.
+3. **Passed:** Chrome added the published test product as a signed-out guest. After sign-in, both authenticated browser sessions returned the merged member cart and the test SKU quantity included the guest addition. The test quantity was restored to its pre-test value. The server-side merge function's rollback verification separately covers unavailable and invalid quantities.
 4. **Pending:** an offline admin save must report failure, followed by a successful retry after network recovery.
 
 ## Scope and recovery
