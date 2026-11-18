@@ -36,7 +36,7 @@ p {color:var(--muted);line-height:1.55}
 .head-inner {display:grid;grid-template-columns:auto minmax(230px,1fr) auto;gap:clamp(18px,4.3vw,70px);align-items:center;min-height:77px}
 .logo {display:inline-flex;align-items:center;gap:11px;font-size:1.35rem;letter-spacing:-.055em;font-weight:780;white-space:nowrap;width:max-content}
 .logo b {color:#4d795a}
-.mark {display:block;flex:none;width:43px;height:43px;border-radius:13px;background:#f0eced url('logo.png') center/125% no-repeat}
+.mark {display:block;flex:none;width:49.5px;height:49.5px;border-radius:15px;background:#f0eced url('logo.png') center/125% no-repeat}
 .search {display:flex;align-items:center;gap:11px;padding:5px 5px 5px 16px;border:1px solid #e6eae3;border-radius:26px;background:#f5f7f3}
 .search .icon {color:#5d7363;width:19px}
 .search input {width:100%;border:0;background:transparent;outline:none!important;padding:7px 0;min-width:0}
@@ -255,7 +255,7 @@ td code {white-space:nowrap}
   .wrap {width:calc(100% - 28px)}
   .head-inner {grid-template-columns:1fr auto;gap:9px;min-height:0;padding:10px 0 8px}
   .logo {font-size:1.13rem;gap:7px}
-  .mark {width:36px;height:36px;border-radius:10px}
+  .mark {width:41.4px;height:41.4px;border-radius:11.5px}
   .search {grid-row:2;grid-column:1/-1;min-height:41px}
   .search input {font-size:.89rem}
   .search button {padding:8px 13px}
