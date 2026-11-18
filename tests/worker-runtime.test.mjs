@@ -35,7 +35,7 @@ test('real Workers auth runtime encrypts sessions and serves protected callback 
  let stored,assetPath;
  const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:await readFile('.cloudflare/output/v1/workers/default/bundle/index.js','utf8'),compatibilityDate:'2026-11-17',
   bindings:{SUPABASE_URL:origin,SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixture',SUPABASE_SECRET_KEY:'sb_secret_fixture'},
-  serviceBindings:{ASSETS:async request=>{assetPath=new URL(request.url).pathname;return new RuntimeResponse('<html><body>Callback</body></html>',{headers:{'content-type':'text/html'}});}},
+  serviceBindings:{ASSETS:async request=>{assetPath=new URL(request.url).pathname;if(assetPath!=='/')return new RuntimeResponse(null,{status:307,headers:{location:'/'}});return new RuntimeResponse('<html><body>Callback</body></html>',{headers:{'content-type':'text/html'}});}},
   outboundService:async request=>{
    const path=new URL(request.url).pathname;
    assert.equal(new URL(request.url).origin,origin);
@@ -52,6 +52,6 @@ test('real Workers auth runtime encrypts sessions and serves protected callback 
   assert.equal(r.status,200);assert.ok(r.headers.get('set-cookie').includes('HttpOnly; Secure; SameSite=Lax'));
   assert.notEqual(stored.access_token_encrypted,token);assert.equal(stored.session_hash.length,64);
   const callback=await mf.dispatchFetch('https://cpvaluemart.com/auth/reset?token_hash=fixture&type=recovery');
-  assert.equal(callback.status,200);assert.equal(assetPath,'/index.html');assert.equal(callback.headers.get('referrer-policy'),'no-referrer');assert.ok(callback.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
+  assert.equal(callback.status,200);assert.equal(assetPath,'/');assert.equal(callback.headers.get('referrer-policy'),'no-referrer');assert.ok(callback.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
  }finally{await mf.dispose();}
 });

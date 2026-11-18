@@ -15,7 +15,7 @@ export function setAuthListener(fn){onAuthChange=fn;channel?.addEventListener('m
 export async function authRequest(path,data) {
  const r=await fetch(path,{method:data===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',headers:data===undefined?{}:{'Content-Type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
  let body;try{body=await r.json();}catch{throw Error('Account service is unavailable. Please try again.');}
- if(!r.ok){if(r.status===401){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}throw Error(body.error?.message??'Request failed. Please try again.');}
+ if(!r.ok){if(r.status===401){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;throw error;}
  return body;
 }
 export async function refreshSession() {
@@ -34,7 +34,7 @@ export function authForms(params) {
  if(auth.error)return '<section class="panel narrow"><h1>My account</h1><p role="alert">'+e(auth.error)+'</p><button class="btn primary" data-auth-retry>Try again</button></section>';
  if(mode==='invalid')return '<section class="panel narrow"><h1>Email link unavailable</h1><p>This link is invalid or incomplete. Request a new verification or password reset email.</p><a class="btn outline" href="#/account?mode=recover">Reset password</a> <a class="text-link" href="#/account?mode=resend">Resend verification</a></section>';
  if(callback)return '<section class="panel narrow"><h1>'+(callback.type==='recovery'?'Reset your password':'Verify your email')+'</h1><p>Continue to confirm this email link.</p><form id="auth-verify" class="form-stack"><button class="btn primary">'+(callback.type==='recovery'?'Continue password reset':'Verify my email')+'</button>'+status+'</form></section>';
- if(auth.recoveryOnly)return '<section class="panel narrow"><h1>Choose a new password</h1><form id="auth-password" class="form-stack">'+pass('new-password')+input('Confirm password','confirmPassword','password','autocomplete="new-password" minlength="12" maxlength="128"')+'<p>Use 12–128 characters.</p><button class="btn primary">Save new password</button>'+status+'</form></section>';
+ if(auth.recoveryOnly)return '<section class="panel narrow"><h1>Choose a new password</h1><p>Account: '+e(auth.account?.email)+'</p><form id="auth-password" class="form-stack">'+pass('new-password')+input('Confirm password','confirmPassword','password','autocomplete="new-password" minlength="12" maxlength="128"')+'<p>Use 12–128 characters.</p><button class="btn primary">Save new password</button>'+status+'</form></section>';
  if(auth.account&&!['recover','resend'].includes(mode))return null;
  const email=input('Email address','email','email','autocomplete="email" maxlength="254"');
  if(mode==='register')return '<section class="panel narrow"><h1>Create your account</h1><form id="auth-signup" class="form-stack">'+input('Name','name','text','autocomplete="name" maxlength="80"')+email+pass('new-password')+'<p>Use 12–128 characters. Verify your email before signing in.</p><button class="btn primary">Create account</button>'+status+'</form><p>Already registered? <a href="#/account">Sign in</a></p></section>';
@@ -45,7 +45,9 @@ export async function submitAuth(form,fields) {
  const action=form.id.slice(5);
  if(action==='password'&&fields.password!==fields.confirmPassword)throw Error('Passwords do not match.');
  const path=action==='profile'?'/api/profile':action==='address'?'/api/addresses':'/api/auth/'+action;
- const result=await authRequest(path,action==='verify'?callback:fields);
+ let result;
+ try{result=await authRequest(path,action==='verify'?callback:fields);}
+ catch(error){if(action==='verify'&&error.code==='INVALID_LINK'){callback=null;history.replaceState(null,'','/#/account?mode=invalid');onAuthChange();}throw error;}
  if(action==='verify')callback=null;
  if(['login','verify','password','profile'].includes(action)){channel?.postMessage('changed');await refreshSession();}
  if(action==='address')await loadAddresses();

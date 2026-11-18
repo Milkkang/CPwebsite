@@ -14,7 +14,7 @@ export default {
     const pathname = new URL(request.url).pathname;
     if (['/auth/confirm','/auth/reset'].includes(pathname)) {
       if(request.method!=='GET'&&request.method!=='HEAD') return new Response('Method not allowed',{status:405,headers:{Allow:'GET, HEAD'}});
-      const asset=await env.ASSETS.fetch(new Request(new URL('/index.html',request.url),request));
+      const asset=await env.ASSETS.fetch(new Request(new URL('/',request.url),request));
       const response=new Response(asset.body,asset);
       response.headers.set('Cache-Control','no-store');
       response.headers.set('Referrer-Policy','no-referrer');

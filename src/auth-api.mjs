@@ -88,7 +88,14 @@ export async function handleAuth(request,env) {
   return result({ok:true,message:'If this address is eligible, an email will arrive shortly. Check your inbox and spam folder.'},undefined,202);
  }
  if(path==='/api/auth/verify'&&!read){const data=await bodyJSON(request);const tokenHash=field(data,'token_hash',32,512);if(!/^[A-Za-z0-9_-]+$/.test(tokenHash)||!['email','recovery'].includes(data.type))bad();await limit(request,env,'verify');
-  const r=await upstream(env,'/auth/v1/verify',{method:'POST',body:{token_hash:tokenHash,type:data.type},allowFailure:true});if(!r.ok)throw new ApiError(400,'INVALID_LINK','This link is invalid or has expired. Request a new email.');return result({ok:true,recoveryOnly:data.type==='recovery'},await establish(env,r.data,data.type==='recovery'));
+  const r=await upstream(env,'/auth/v1/verify',{method:'POST',body:{token_hash:tokenHash,type:data.type},allowFailure:true});if(!r.ok)throw new ApiError(400,'INVALID_LINK','This link is invalid or has expired. Request a new email.');
+  if(data.type==='email'){
+   const user=await upstream(env,'/auth/v1/user',{token:r.data.access_token,allowFailure:true});
+   if(!user.ok||!user.data?.email_confirmed_at)throw new ApiError(400,'INVALID_LINK','This link is invalid or has expired. Request a new email.');
+   try{await upstream(env,'/auth/v1/logout?scope=local',{method:'POST',token:r.data.access_token,allowFailure:true});}catch{}
+   return result({ok:true,recoveryOnly:false,requiresLogin:true,message:'Email verified. Sign in with your password.'});
+  }
+  return result({ok:true,recoveryOnly:true},await establish(env,r.data,true));
  }
  const who=await identity(request,env,{allowRecovery:path==='/api/auth/password'});
  if(path==='/api/auth/password'&&!read){const data=await bodyJSON(request);const pass=password(data);await limit(request,env,'password',who.account.id);

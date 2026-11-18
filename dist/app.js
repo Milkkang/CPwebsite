@@ -142,7 +142,7 @@ document.addEventListener('submit', async event=>{
       const result=await submitAuth(form,f);
       if(form.id==='auth-login')returnAfterSignIn(form.dataset.next??'');
       else if(form.id==='auth-password'){navigate('/account');message(result.message);}
-      else if(form.id==='auth-verify'){navigate('/account');message(result.recoveryOnly?'Choose your new password.':'Your email is verified.');}
+      else if(form.id==='auth-verify'){navigate('/account');message(result.recoveryOnly?'Choose your new password.':'Email verified. Sign in with your password.');}
       else if(form.id==='auth-profile')message('Name saved.');
       else if(form.id==='auth-address')message('Address saved.');
       else if(status){status.hidden=false;status.textContent=result.message;}
