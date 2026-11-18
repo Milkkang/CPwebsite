@@ -1,4 +1,4 @@
-import {state,cash,escape as e,categories,categoryName,productPrice,cartLines,totals,matching,imageUrl,statusList,findProduct,buyerOrders,pendingReviewItems} from './store.js';
+import {state,cash,escape as e,categories,categoryName,productPrice,cartLines,totals,matching,imageUrl,statusList,findProduct,buyerOrders,pendingReviewItems,homepageSettings} from './store.js';
 
 export const href = (path, params={}) => '#'+path+(Object.keys(params).length ? '?'+new URLSearchParams(params) : '');
 export const link = (path,label,klass='') => '<a class="'+klass+'" href="'+e(path)+'">'+label+'</a>';
@@ -75,7 +75,7 @@ const categoryIcon = id => {
   };
   return '<svg class="category-symbol" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+paths[id]+'</svg>';
 };
-const categoriesGrid = () => '<div class="cat-grid">'+categories.map(([id,name,symbol,tone])=>go('/category/'+id,'<span class="cat-icon '+tone+'">'+categoryIcon(id)+'</span><b>'+e(name)+'</b>','cat-card')).join('')+'</div>';
+const categoriesGrid = (rows=categories) => '<div class="cat-grid">'+rows.map(([id,name,symbol,tone])=>go('/category/'+id,'<span class="cat-icon '+tone+'">'+categoryIcon(id)+'</span><b>'+e(name)+'</b>','cat-card')).join('')+'</div>';
 export function card(p,{quickAdd=false}={}) {
   const saved=state.saved.includes(p.id), variant=p.variants.find(v=>v.stock>=v.min), single=p.variants.length===1;
   const direct=quickAdd&&variant;
@@ -90,9 +90,12 @@ export function card(p,{quickAdd=false}={}) {
 export const grid = (rows,options) => '<div class="product-grid">'+rows.map(product=>card(product,options)).join('')+'</div>';
 export function home() {
   const featured=state.products.filter(p=>p.featured&&p.status==='Published').slice(0,8);
-  const visual=featured.slice(0,3).map((p,i)=>'<figure class="hero-tile tile-'+i+'"><img src="'+e(imageUrl(p.image))+'" alt=""></figure>').join('');
-  return '<section class="hero"><div class="hero-copy"><p class="overline">CP VALUE MART · SINGAPORE</p><h1>Everyday essentials,<br>within easy reach.</h1><p class="hero-desc">Shop personal care, household favourites and pantry staples in one place.</p><div class="button-row">'+go('/shop','Shop all products <span>↗</span>','btn primary')+go('/offers','View offers','btn outline')+'</div></div><div class="hero-media" aria-hidden="true">'+visual+'</div></section>'+
-    '<section class="section"><div class="section-title"><h2>Shop by category</h2>'+go('/categories','View all categories ↗','text-link')+'</div>'+categoriesGrid()+'</section>'+
+  const config=homepageSettings();
+  const heroProducts=config.heroProductIds.length?config.heroProductIds.map(findProduct).filter(p=>p?.status==='Published').slice(0,3):featured.slice(0,3);
+  const shownCategories=categories.filter(([id])=>config.categoryIds.includes(id));
+  const visual=heroProducts.map((p,i)=>'<figure class="hero-tile tile-'+i+'"><img src="'+e(imageUrl(p.image))+'" alt=""></figure>').join('');
+  return '<section class="hero"><div class="hero-copy"><p class="overline">'+e(config.eyebrow)+'</p><h1>'+e(config.title).replaceAll('\n','<br>')+'</h1><p class="hero-desc">'+e(config.description)+'</p><div class="button-row">'+go(config.primaryPath,e(config.primaryLabel)+' <span>↗</span>','btn primary')+(config.secondaryLabel?go(config.secondaryPath,e(config.secondaryLabel),'btn outline'):'')+'</div></div><div class="hero-media" aria-hidden="true">'+visual+'</div></section>'+
+    (shownCategories.length?'<section class="section"><div class="section-title"><h2>'+e(config.categoryTitle)+'</h2>'+go('/categories','View all categories ↗','text-link')+'</div>'+categoriesGrid(shownCategories)+'</section>':'')+
     '<section class="section"><div class="section-title"><h2>Everyday favourites</h2>'+go('/shop','Browse all products ↗','text-link')+'</div>'+(featured.length?grid(featured,{quickAdd:true}):empty('No featured products','Browse the full assortment.',go('/shop','Shop all','btn primary')))+'</section>';
 }
 export const allCategories=()=>crumb('Categories')+'<div class="page-title"><h1>Shop by category</h1></div>'+categoriesGrid();

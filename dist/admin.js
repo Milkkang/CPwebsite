@@ -1,8 +1,8 @@
-import {state,save,cash,escape as e,categoryName,categories,statusList,updateOrder,imageUrl,findProduct,orderDate} from './store.js';
+import {state,save,cash,escape as e,categoryName,categories,statusList,updateOrder,imageUrl,findProduct,orderDate,homepageSettings} from './store.js';
 import {go,link,href,badge,selected,checked,photo,empty,orderDisplay,productLabel,orderItemsPreview} from './shop.js';
 import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
-const nav=[['','Overview'],['revenue','Revenue'],['products','Products'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
+const nav=[['','Overview'],['revenue','Revenue'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
   return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Design preview</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
@@ -231,6 +231,38 @@ function searchPage() {
   return heading('Search insights','Searches submitted in this preview browser.')+
     table(['Search term','Searches','No results'],rows.map(([q,n])=>'<tr><td>'+e(q)+'</td><td>'+n.count+'</td><td>'+n.misses+'</td></tr>').join('')||'<tr><td colspan="3">No searches recorded. Try the storefront search.</td></tr>');
 }
+function homepagePage() {
+  const c=homepageSettings();
+  const destinations=['/shop','/offers','/categories',...categories.map(([id])=>'/category/'+id)];
+  const destination=(label,name,value)=>'<label>'+label+'<select name="'+name+'">'+destinations.map(path=>'<option value="'+e(path)+'"'+selected(path,value)+'>'+e(path==='/shop'?'All products':path==='/offers'?'Offers':path==='/categories'?'All categories':categoryName(path.split('/').at(-1)))+'</option>').join('')+'</select></label>';
+  const products=state.products.filter(p=>p.status==='Published');
+  return heading('Homepage','Edit the hero banner and choose the categories shown below it.',go('/','View homepage ↗','btn outline'))+
+    '<p class="subtle">Settings are saved in this browser only, as with the other preview settings.</p><form id="homepage-form" class="form-stack editor">'+
+    '<section class="panel form-stack"><h2>Hero banner</h2>'+field('Small heading','eyebrow',c.eyebrow,'maxlength="100"')+
+    '<label>Main heading<textarea name="title" rows="3" required maxlength="180">'+e(c.title)+'</textarea></label><label>Description<textarea name="description" rows="3" maxlength="500">'+e(c.description)+'</textarea></label><div class="field-grid">'+
+    field('Main button text','primaryLabel',c.primaryLabel,'required maxlength="50"')+destination('Main button destination','primaryPath',c.primaryPath)+
+    field('Second button text (leave blank to hide)','secondaryLabel',c.secondaryLabel,'maxlength="50"')+destination('Second button destination','secondaryPath',c.secondaryPath)+'</div>'+
+    '<h3>Banner products</h3><p class="subtle">Choose up to three published products. Leave all three on Automatic to use homepage favourites.</p>'+[0,1,2].map(i=>'<label>Product '+(i+1)+'<select name="heroProductId"><option value="">Automatic</option>'+products.map(p=>'<option value="'+e(p.id)+'"'+selected(p.id,c.heroProductIds[i])+'>'+e(p.sku+' · '+p.name)+'</option>').join('')+'</select></label>').join('')+'</section>'+
+    '<section class="panel form-stack"><h2>Homepage categories</h2>'+field('Section heading','categoryTitle',c.categoryTitle,'required maxlength="100"')+'<p class="subtle">Only checked categories appear below the banner. Uncheck all to hide this section.</p><div class="field-grid">'+categories.map(([id,name])=>'<label class="check-label"><input type="checkbox" name="categoryId" value="'+e(id)+'"'+checked(c.categoryIds.includes(id))+'>'+e(name)+'</label>').join('')+'</div></section><div class="button-row"><button class="btn primary">Save homepage</button>'+go('/','View homepage','btn outline')+'</div></form>';
+}
+export function saveHomepage(values) {
+  const text=(name)=>String(values.get(name)??'').trim();
+  const limits={eyebrow:100,title:180,description:500,primaryLabel:50,secondaryLabel:50,categoryTitle:100};
+  const next=Object.fromEntries(Object.entries(limits).map(([key])=>[key,text(key)]));
+  if(!next.title||!next.primaryLabel||!next.categoryTitle) return 'Enter the main heading, main button text and category heading.';
+  if(Object.entries(limits).some(([key,max])=>next[key].length>max)) return 'One of the text fields is too long.';
+  const destinations=new Set(['/shop','/offers','/categories',...categories.map(([id])=>'/category/'+id)]);
+  for(const key of ['primaryPath','secondaryPath']) {
+    next[key]=text(key);
+    if(!destinations.has(next[key])) return 'Choose a valid button destination.';
+  }
+  const ids=values.getAll('categoryId');
+  if(ids.some(id=>!categories.some(([known])=>id===known))) return 'Choose a valid category.';
+  next.categoryIds=[...new Set(ids)];
+  next.heroProductIds=[...new Set(values.getAll('heroProductId').filter(Boolean))];
+  if(next.heroProductIds.length>3||next.heroProductIds.some(id=>findProduct(id)?.status!=='Published')) return 'Choose up to three published banner products.';
+  state.settings.homepage=next;save();
+}
 function settingsPage() {
   return heading('Settings','Delivery rules apply immediately to the storefront.')+
     '<form class="panel form-stack narrow" id="settings-form"><h2>Singapore delivery</h2>'+amountInput('Standard delivery charge (SGD)','shipping',state.settings.shipping)+
@@ -248,6 +280,7 @@ export function adminPage(page,id,params) {
     case 'coupons': body=couponPage();break;
     case 'search': body=searchPage();break;
     case 'settings': body=settingsPage();break;
+    case 'homepage': body=homepagePage();break;
     default: body=empty('Admin page not found','Return to the overview.',go('/admin','Overview','btn primary'));
   }
   return adminFrame(page,body);

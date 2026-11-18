@@ -1,6 +1,6 @@
 import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,makeOrder,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
-import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
+import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
 
 const app=document.getElementById('app'), toast=document.getElementById('toast'), modal=document.getElementById('dialog');
 const imageDialog=document.getElementById('image-dialog');
@@ -187,6 +187,9 @@ document.addEventListener('submit', event=>{
       if(!row) {error='Variant no longer exists.';break;}
       row.variant.stock=Number(f.stock); save(); modal.close(); render();message('Stock updated.');break;
     }
+    case 'homepage-form':
+      error=saveHomepage(data);
+      if(!error) {render();message('Homepage saved.');} break;
     case 'settings-form':
       saveSettings(data);render();message('Delivery settings saved.');break;
     case 'bulk-form':

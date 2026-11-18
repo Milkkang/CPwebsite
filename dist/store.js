@@ -20,6 +20,14 @@ export const imageUrl = value => {
   return /^(https:\/\/[^\s]+|assets\/[a-z0-9_-]+\.webp)$/i.test(url) ? url : '';
 };
 
+export const homepageDefaults = {
+  eyebrow:'CP VALUE MART · SINGAPORE',title:'Everyday essentials,\nwithin easy reach.',
+  description:'Shop personal care, household favourites and pantry staples in one place.',
+  primaryLabel:'Shop all products',primaryPath:'/shop',secondaryLabel:'View offers',secondaryPath:'/offers',
+  categoryTitle:'Shop by category',categoryIds:categories.map(([id])=>id),heroProductIds:[]
+};
+export const homepageSettings = () => ({...homepageDefaults,...state.settings.homepage});
+
 function splitProducts(products) {
   return products.flatMap(product => product.variants.map((variant,index) => {
     if(product.variants.length===1 && product.id===variant.sku) return product;
