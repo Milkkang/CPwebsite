@@ -14,11 +14,11 @@ Auth 密码、注册、重发验证、重置请求与 TokenHash 验证均由同�
 
 每次私有 API 请求检查网站会话、Auth session 当前存在性、到期时间、邮箱验证及封禁状态。退出先删除网站会话，再尽力撤销上游；上游故障不能恢复本网站权限。密码更新成功后撤销该用户全部网站会话。恢复会话不能读会员资料或使用后台，只能完成密码更新及退出。
 
-会话最长 1 小时且不超过 Supabase access token 剩余寿命，刷新页面保留登录；到期后重新输入密码。暂不提供长期记住登录/自动 refresh token；Secret 轮换需要用户重新登录。后台权限来自实时数据库 admin_roles 且仍要求指定已验证邮箱，不信任客户端 role 或 user_metadata。
+会话最长 1 小时且不超过 Supabase access token 剩余寿命，刷新页面保留登录；到期后重新输入密码。暂不提供长期记住登录/自动 refresh token；Secret 轮换时应撤销旧网站会话并要求重新登录，以免旧密文无法解密。后台权限来自实时数据库 admin_roles 且仍要求指定已验证邮箱，不信任客户端 role 或 user_metadata。
 
 buyer_profiles / buyer_addresses 采用所有者 RLS + 有效 Auth session 检查；不能读取/改写其他用户或转移 user_id。server_sessions / auth_rate_limits 不对客户端授权。私有 schema 中窄范围 SECURITY DEFINER helper 仅供指定角色调用；公开 wrapper 为 SECURITY INVOKER。认证邮件/登录请求有数据库原子限流，来源 IP/邮箱组合只以带服务端秘密的哈希保存，过期清理，不写请求日志。
 
-GET 回调页面只显示确认按钮，不自动消耗 TokenHash；no-store、no-referrer 和 CSP，加载后立即移除地址栏令牌，只保留内存。固定同源 Origin 校验防止跨站表单请求。所有上游重定向拒绝跟随；错误不返回 SMTP/令牌详情。
+注册邮件仅确认邮箱，完成后仍需本人密码登录，不从邮件链接建立普通网站登录会话。GET 回调页面只显示确认按钮，不自动消耗 TokenHash；no-store、no-referrer 和 CSP，加载后立即移除地址栏令牌，只保留内存。固定同源 Origin 校验防止跨站表单请求。所有上游重定向拒绝跟随；错误不返回 SMTP/令牌详情。
 
 前端移除旧输入名字即登录/模拟登录按钮；localStorage 中的 account 始终忽略且不再持久化。后台界面登录保护，后台操作前实时检查 /api/admin/access；尚无商品后台写入 API，Phase 2 的业务表客户端写权限保持关闭。后台商品设置在 Phase 4 接通共享写入。购物目录/分页/样式沿用原站；暂时关闭模拟提交订单入口，购物车保留，真正订单/测试付款在 Phase 5 开放。
 
@@ -31,7 +31,7 @@ GET/POST /api/profile；GET/POST /api/addresses；POST /api/addresses/:id（acti
 
 | 项目 | 状态 |
 | --- | --- |
-| 单元/原商品回归 | 本地 16 项 + 原商品回归通过 |
+| 单元/原商品回归 | 本地 18 项 + 原商品回归通过 |
 | 真实 Workers 运行时 | 通过：目录请求、重定向拒绝、Auth AES-GCM 会话、回调 HTML/安全响应头两项 workerd 测试 |
 | 数据库 RLS / 双用户 / 撤销 | 通过：迁移 20261118074149；两用户隔离、禁止转移所有权、metadata 伪管理员无效、私有会话不可读、Auth 撤销后旧 JWT 无效、限流；夹具全部回滚 |
 | GitHub 分支检查 | 首轮通过 [Actions 44260687108](https://github.com/Milkkang/CPwebsite/actions/runs/44260687108)，最终迁移文件名与远端记录对齐 |
@@ -56,3 +56,9 @@ GET/POST /api/profile；GET/POST /api/addresses；POST /api/addresses/:id（acti
 Supabase security advisor 无 ERROR/WARN；6 个 INFO 为 server_sessions/auth_rate_limits 及此前私有表明确采用 RLS 默认拒绝、无客户端策略，不增加读取策略消除提示。[检查说明](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)。
 
 已记录阶段前仍含最新服务端 Secret 的 Worker 恢复点 82e52f9a-3bfc-4150-a634-f4bce80b2e09，原 deployment 9761ed17-6775-45cc-aaf6-c1813eab9836。
+
+## 回调补充验证
+
+首轮线上检查发现 ASSETS.fetch('/index.html') 在生产会规范化为根路径 307；回调已改为直接取得根路径 HTML，避免丢失 TokenHash 流程。真实 workerd 测试模拟该 307，确保回调仍返回 200 且含 no-store/no-referrer/CSP。INVALID_LINK 会清除内存中的失效回调并显示可用重发入口，瞬时网络错误则保留令牌供重试。
+
+正式 API 已验证：服务端 Secret 能读取受限身份 RPC；匿名私有数据/后台 401，伪造会话不返回身份；错误密码 401、无效 TokenHash 400、跨站 POST 403。以上没有调用发送邮件接口。邮件实际送达、本人密码及管理员授予仍未验收。
