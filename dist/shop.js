@@ -30,11 +30,14 @@ export function photo(p, style='', variant, reference) {
   const sources=[...new Set((reference===undefined?[variant?.image,p.r2,p.image]:[reference]).map(imageUrl).filter(Boolean))];
   const label=p.name||'Product image';
   const classes='photo '+style;
-  if(!sources.length) return '<span class="'+classes+'">'+imagePlaceholder(p)+'</span>';
+  const card=style==='card-photo';
+  const destination=href('/product/'+p.id);
+  if(!sources.length) return card?'<a class="'+classes+'" href="'+e(destination)+'" aria-label="View '+e(label)+'">'+imagePlaceholder(p)+'</a>':'<span class="'+classes+'">'+imagePlaceholder(p)+'</span>';
   const [src,...fallbacks]=sources;
-  return '<button type="button" class="'+classes+'" data-image-preview="'+e(label)+'" aria-label="Enlarge image of '+e(label)+'">'+
+  const opener=card?'<a class="'+classes+'" href="'+e(destination)+'" aria-label="View '+e(label)+'">':'<button type="button" class="'+classes+'" data-image-preview="'+e(label)+'" aria-label="Enlarge image of '+e(label)+'">';
+  return opener+
     '<img src="'+e(src)+'" alt="" data-image-fallbacks="'+e(JSON.stringify(fallbacks))+'" '+(style==='detail-photo'?'fetchpriority="high"':'loading="lazy"')+'>'+
-    '<span class="photo-error" hidden>'+imagePlaceholder(p)+'</span></button>';
+    '<span class="photo-error" hidden>'+imagePlaceholder(p)+'</span>'+(card?'</a>':'</button>');
 }
 export function productLabel(p, content, variant) {
   return '<span class="table-product">'+photo(p,'thumb',variant)+'<span class="product-label">'+content+'</span></span>';
