@@ -30,7 +30,7 @@ export default {
     try {
       if (pathname === '/api/health') {
         response = ['GET', 'HEAD'].includes(request.method)
-          ? json({ ok: true, service: 'cpvaluemart-api', phase: 3 }, 200, requestId)
+          ? json({ ok: true, service: 'cpvaluemart-api', phase: 4 }, 200, requestId)
           : json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } }, 405, requestId, { Allow: 'GET, HEAD' });
       } else if (route === 'account-api') {
         const result=await handleAuth(request,env);

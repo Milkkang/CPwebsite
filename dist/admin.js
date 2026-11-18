@@ -4,7 +4,7 @@ import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
 const nav=[['','Overview'],['revenue','Revenue'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
-  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Design preview</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
+  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Orders pending integration</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
 }
 const heading=(title,subtitle='',actions='')=>'<div class="admin-heading"><div><h1>'+title+'</h1>'+(subtitle?'<p>'+subtitle+'</p>':'')+'</div><div class="button-row">'+actions+'</div></div>';
@@ -107,21 +107,20 @@ function productList(params) {
   const rows=productSearch(q,status).map(p=>({p,variants:low?p.variants.filter(v=>v.stock<=5):p.variants}))
     .filter(row=>row.variants.length);
   return heading('Products',rows.length+' of '+state.products.length+' products',
-    '<label class="btn outline import-label">Import CSV<input id="import-csv" type="file" accept=".csv,text/csv" class="sr-only"></label><button class="btn outline" data-export="products">Export CSV</button>'+go('/admin/products/new','Add product','btn primary'))+
-    '<p class="subtle import-hint">Edit variant name, price, MOQ or status directly; changes save when you leave the field. <button class="link-button" data-export="template">Download CSV template</button> · Import updates by product and variant SKU.</p>'+
+    '<button class="btn outline" data-export="products">Export CSV</button>'+go('/admin/products/new','Add product','btn primary'))+
+    '<p class="subtle import-hint">Edit variant name, price, MOQ or status directly; changes save when you leave the field.</p>'+
     '<form class="admin-filters" id="admin-filter" data-path="/admin/products">'+field('Find product','q',q,'placeholder="Name, brand or SKU"')+
     '<label>Status<select name="status"><option value="">All statuses</option>'+opts(['Published','Draft','Archived'],status)+'</select></label>'+
     '<label>Availability<select name="low"><option value="">All stock levels</option><option value="1"'+selected(low,true)+'>Low stock (5 or fewer)</option></select></label><button class="btn outline">Filter</button></form>'+
     (!rows.length?empty('No matching products','Adjust or clear the product filters.'):
-    '<form id="bulk-form"><div class="bulk-tools"><label class="check-label"><input type="checkbox" id="select-all"> Select all shown</label><label class="sr-only" for="bulk-action">Bulk action</label><select id="bulk-action" name="action" required><option value="">Bulk action</option><option>Publish</option><option>Move to draft</option><option>Archive</option><option>Feature on homepage</option><option>Remove from homepage</option><option>Export selected</option></select><button class="btn small primary">Apply</button></div>'+
-    table(['<span class="sr-only">Select product</span>','Product','Variant','Price (SGD)','Stock','MOQ','Status',''],rows.map(productRows).join(''))+'</form>');
+    table(['Product','Variant','Price (SGD)','Stock','MOQ','Status',''],rows.map(productRows).join('')));
 }
 function productRows({p,variants}) {
   const span=' rowspan="'+variants.length+'"';
   const product=productLabel(p,'<b>'+e(p.name)+'</b><small>'+e(p.brand)+' · '+e(p.sku)+'</small>'+
     '');
   return variants.map((v,i)=>'<tr class="'+(i===0?'product-row-start':'')+'">'+
-    (i===0?'<td'+span+'><input type="checkbox" name="id" value="'+e(p.id)+'" aria-label="Select '+e(p.name)+'"></td><td'+span+'>'+product+'</td>':'')+
+    (i===0?'<td'+span+'>'+product+'</td>':'')+
     '<td><div class="admin-variant">'+photo(p,'variant-thumb',v)+'<div>'+inlineField('name',v.sku,v.name,'text','maxlength="60"')+'<small>'+e(v.sku)+'</small></div></div></td>'+
     '<td class="variant-number">'+inlineField('price',v.sku,(v.price/100).toFixed(2),'number','min="0" max="99999" step="0.01"')+'</td><td class="variant-stock"><span>'+v.stock+'</span><button type="button" class="btn outline small" data-stock="'+e(v.sku)+'" aria-label="Adjust stock for '+e(v.sku)+'">Adjust</button></td><td>'+inlineField('min',v.sku,v.min,'number','min="1" max="100000" step="1"')+'</td>'+
     (i===0?'<td'+span+'><select class="inline-status" data-inline-status="'+e(p.id)+'" aria-label="Status for '+e(p.name)+'">'+opts(['Published','Draft','Archived'],p.status)+'</select></td><td'+span+'>'+link(editHref(p),'Edit ↗','text-link')+'</td>':'')+'</tr>').join('');
@@ -153,8 +152,8 @@ export function updateInlineStatus(id,status) {
   if(!['Published','Draft','Archived'].includes(status)) return 'Choose a valid status.';
   p.status=status;save();
 }
-function variantFields(v={},i=0,p={}) {
-  return '<fieldset class="variant-fields"><legend>Variant '+(i+1)+'</legend><button type="button" class="btn outline small variant-remove" data-remove-variant aria-label="Delete variant '+(i+1)+'">Delete variant</button><input type="hidden" name="oldSku" value="'+e(v.sku??'')+'">'+
+function variantFields(v={},i=0,p={},allowRemove=true) {
+  return '<fieldset class="variant-fields"><legend>Variant '+(i+1)+'</legend>'+(allowRemove?'<button type="button" class="btn outline small variant-remove" data-remove-variant aria-label="Delete variant '+(i+1)+'">Delete variant</button>':'')+'<input type="hidden" name="oldSku" value="'+e(v.sku??'')+'">'+
     field('Name','variantName',v.name??'','required maxlength="60"')+
     field('Variant SKU','variantSku',v.sku??'','required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+"')+
     field('Price (SGD)','variantPrice',v.price===undefined?'':(v.price/100).toFixed(2),'type="number" min="0" max="99999" step="0.01" required')+
@@ -176,7 +175,7 @@ export function productEditor(id) {
     '<label>Description<textarea name="description" rows="3" maxlength="1000">'+e(p.description)+'</textarea></label>'+
     field('Search keywords','keywords',p.keywords,'maxlength="300" placeholder="English names, 中文 keywords, common abbreviations"')+
     field('R2 image URL','image',p.image,'maxlength="350" placeholder="https://…"')+'</section>'+
-    '<section class="panel form-stack"><div class="section-title"><h2>Variants, stock and price</h2><button type="button" class="btn outline small" data-add-variant>Add variant</button></div><div id="variant-fields">'+p.variants.map((v,i)=>variantFields(v,i,p)).join('')+'</div></section>'+
+    '<section class="panel form-stack"><div class="section-title"><h2>Listing, stock and price</h2></div><p class="subtle">Each SKU is one listing. Enter the same SKU in both fields.</p><div id="variant-fields">'+(p.variants.length?p.variants:[{name:'',sku:'',price:0,stock:0,min:1,image:''}]).slice(0,1).map((v,i)=>variantFields(v,i,p,false)).join('')+'</div></section>'+
     '<div class="button-row"><button class="btn primary">Save product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
 }
 function ordersTable(rows,filters) {
@@ -237,7 +236,7 @@ function homepagePage() {
   const destination=(label,name,value)=>'<label>'+label+'<select name="'+name+'">'+destinations.map(path=>'<option value="'+e(path)+'"'+selected(path,value)+'>'+e(path==='/shop'?'All products':path==='/offers'?'Offers':path==='/categories'?'All categories':categoryName(path.split('/').at(-1)))+'</option>').join('')+'</select></label>';
   const products=state.products.filter(p=>p.status==='Published');
   return heading('Homepage','Edit the hero banner and choose the categories shown below it.',go('/','View homepage ↗','btn outline'))+
-    '<p class="subtle">Settings are saved in this browser only, as with the other preview settings.</p><form id="homepage-form" class="form-stack editor">'+
+    '<form id="homepage-form" class="form-stack editor">'+
     '<section class="panel form-stack"><h2>Hero banner</h2>'+field('Small heading','eyebrow',c.eyebrow,'maxlength="100"')+
     '<label>Main heading<textarea name="title" rows="3" required maxlength="180">'+e(c.title)+'</textarea></label><label>Description<textarea name="description" rows="3" maxlength="500">'+e(c.description)+'</textarea></label><div class="field-grid">'+
     field('Main button text','primaryLabel',c.primaryLabel,'required maxlength="50"')+destination('Main button destination','primaryPath',c.primaryPath)+
@@ -266,8 +265,7 @@ export function saveHomepage(values) {
 function settingsPage() {
   return heading('Settings','Delivery rules apply immediately to the storefront.')+
     '<form class="panel form-stack narrow" id="settings-form"><h2>Singapore delivery</h2>'+amountInput('Standard delivery charge (SGD)','shipping',state.settings.shipping)+
-    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>'+
-    '<section class="panel narrow reset-panel"><h2>Reset demo data</h2><p>Restore the imported products and initial stock; clear simulated orders in this browser.</p><button class="btn outline" data-reset>Reset preview</button></section>';
+    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>';
 }
 export function adminPage(page,id,params) {
   let body;
@@ -299,7 +297,7 @@ export function extraVariant() {
 }
 export function stockEditor(sku,variant,product) {
   return '<form class="form-stack" id="stock-editor" data-sku="'+e(sku)+'"><h2 id="dialog-title">Adjust inventory</h2>'+productLabel(product,'<b>'+e(product.name)+'</b><small>'+e(sku)+'</small>',variant)+
-    field('Available units','stock',variant.stock,'type="number" min="0" max="100000" required')+'<button class="btn primary">Save stock</button></form>';
+    field('Stock on hand','stock',variant.stock,'type="number" min="0" max="100000" required')+'<button class="btn primary">Save stock</button></form>';
 }
 export function couponEditor(code) {
   const c=state.coupons.find(row=>row.code===code)??{code:'',type:'percent',amount:5,min:0,active:true};
