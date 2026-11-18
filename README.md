@@ -47,10 +47,24 @@ GitHub pull requests run the same checks before merge. Configuration is in
 `cloudflare.config.ts`; the front end remains vanilla JavaScript in `dist/`.
 
 `GET /api/health` is a liveness check, not a database/payment readiness check.
-All other `/api/*` routes currently return JSON 404. Business data still uses the
+Phase 2 adds read-only product, category and public configuration APIs; unknown API routes return JSON 404. Business data still uses the
 existing browser-local preview implementation until later phases.
 
 Configure runtime secrets in Cloudflare Worker Settings → Variables and Secrets,
 never Builds variables. Do not commit `.env`, `.dev.vars`, secret values, tokens,
 or database exports. No service secret is needed for this phase's liveness API.
 See `docs/phase-1-acceptance.md` for validation, limitations and recovery.
+
+## Phase 2 database catalog
+
+Production database: Supabase cpvaluemart-production (Singapore). The storefront
+still uses its original preview data until Phase 4. No buyer/admin writes are
+accepted by the new API. Read endpoints: `/api/products`, `/api/products/:sku`,
+`/api/categories`, `/api/config`. Catalog accepts `q`, `category`, `brand`,
+`sort=featured|price-up|price-down|name`, `size=30|50|100` and positive `page`.
+
+`npm run data:prepare` regenerates the checked, idempotent initial seed and report.
+Apply the tracked migration before the seed; `supabase/phase-2-verification.sql`
+checks production constraints/RLS inside a rolled-back transaction. The browser
+export and read-only difference tool are in `scripts/migration/`. See
+`docs/phase-2-acceptance.md` for import boundaries, acceptance and recovery.

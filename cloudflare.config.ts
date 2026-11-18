@@ -9,7 +9,10 @@ export default defineConfig({
     previewUrls: true,
     entrypoint: './src/worker.mjs',
     compatibilityDate: '2026-11-17',
-    env: { ASSETS: bindings.assets() },
+    env: { ASSETS: bindings.assets(),
+      SUPABASE_URL: bindings.text('https://tfrfkvkjmaqnpxdhxumr.supabase.co'),
+      SUPABASE_PUBLISHABLE_KEY: bindings.secret()
+    },
     assets: { runWorkerFirst: ['/api', '/api/*'], notFoundHandling: '404-page' },
     observability: { enabled: true, redactQueryString: true,
       logs: { enabled: true, invocationLogs: false }, traces: { enabled: false } }
