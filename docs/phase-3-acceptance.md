@@ -1,8 +1,8 @@
 # Phase 3 — 会员与管理员鉴权
 
-状态：代码已部署，自动及权限测试通过；等待用户真实注册、验证、登录与密码重置。Phase 3 尚未通过，不进入 Phase 4。
+状态：已通过自动测试、正式部署与逐项人工验收；用户已明确回复 `Approved Phase 3`，准许进入 Phase 4。下文保留实施过程中的待办记录，最终结果见文末续验。
 
-## 配置核对
+## 配置核对（初始记录）
 
 - 用户已保存 Cloudflare Runtime SUPABASE_SECRET_KEY；仅检查过名称，未读取值；Builds 为空。
 - 用户已保存 Resend SMTP（orders@notify.cpvaluemart.com，CP Value Mart，smtp.resend.com，465，resend，受限 notify 发信 key）。未读取 SMTP 密码；真实送达待验收。
@@ -95,4 +95,11 @@ Supabase security advisor 无 ERROR/WARN；6 个 INFO 为 server_sessions/auth_r
 - Supabase 安全建议为 6 个受 RLS 保护且故意没有公开 policy 的内部表 INFO，另有一项 Free 套餐不支持的泄露密码检查 WARN：[密码安全说明](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection)。
 - 数据影响：已应用的迁移只增加默认指针并为既有账户选择最早保存地址；本轮 SQL 检查全部回滚。代码恢复应回退到上一个通过真实鉴权验收的 Worker 版本；数据库保留兼容的默认地址字段和 RPC。
 
-待记录最新 PR CI、合并提交、Worker 版本、正式域名核验、桌面和手机人工结果以及真实退出、账户页改密、邮件恢复。Phase 3 尚未批准。
+### 2026-11-18 正式发布与重置邮件续验
+
+- PR #6 最新提交 `5a68ec468b95e00102c56a50b955dbfaebf6c262` 的 Phase checks run 36 通过；合并提交 `91b4e83e9fe39596c85a332bf3b4d32a37490c3b`。Cloudflare 部署 `922b4b82-89c0-46fe-970f-eea05f00599c`，Worker 版本 `fd846239-9ae5-4c96-8c7a-2545abeb4431` 以 100% 流量运行。
+- 正式域名 `/api/health` 返回 200；匿名访问管理员、资料和地址接口均返回 401。正式账户页桌面 960px、手机 347px 的五个区块宽度和左边距一致，显示一个 Default 标记、一个 Set default 入口及三个改密字段。检查未读取或更改真实地址。
+- 用户反馈最初未见重置邮件；排查发现当时有三次 `/auth/v1/resend`（注册验证邮件重发）请求，已验证账户不会据此收到重置邮件。随后 `/auth/v1/recover` 于 11:55 UTC 返回 200，Supabase Auth 审计记录为 `user_recovery_requested`；Resend 将主题为 “Reset your CP Value Mart password” 的邮件标记 delivered。用户确认找到邮件、完成重置并用新密码登录；审计记录随后包含 `user_updated_password` 和 `login`。不记录邮件链接或密码。
+- 代码恢复点为前一正式 Worker 版本 `33d10c82-5227-46a2-a1c6-8bb36164c706`；数据库迁移是加法变更，旧 Worker 删除地址路径仍兼容。回退代码时不逆转已选默认地址或删除真实地址。
+
+用户已确认：默认地址切换后刷新仍正确；错误当前密码不改密且保持登录；账户页正确改密后可用新密码登录；退出后 Admin 被拦截；手机账户页布局通过。此前已确认资料保存、注册验证、登录和后台可进入；本轮已确认邮件恢复链接、重置及新密码登录。Phase 3 逐项人工验收通过。用户明确回复 `Approved Phase 3`，批准进入 Phase 4；同时允许将含部署编号和审计事件类型的本记录发布到公开仓库。
