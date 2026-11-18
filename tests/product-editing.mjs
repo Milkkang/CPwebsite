@@ -57,3 +57,18 @@ homepage.set('primaryPath','javascript:alert(1)');
 assert.equal(typeof saveHomepage(homepage),'string');
 assert.equal(state.settings.homepage.primaryPath,'/shop');
 console.log('PASS: homepage settings, escaping, category visibility, persistence and destination validation');
+
+const {catalog,catalogPagination}=await import('../dist/shop.js');
+const params=new URLSearchParams();
+assert.equal(catalogPagination(params,678).size,30);
+assert.equal((catalog('/shop',params).match(/class="product-card"/g)??[]).length,30);
+params.set('size','50'); params.set('page','2');
+assert.deepEqual(catalogPagination(params,678),{size:50,pages:14,page:2,start:50});
+assert.equal((catalog('/shop',params).match(/class="product-card"/g)??[]).length,50);
+params.set('size','100'); params.set('page','999');
+assert.equal(catalogPagination(params,678).page,7);
+params.set('size','invalid'); params.set('page','-2');
+assert.equal(catalogPagination(params,0).page,1);
+assert.equal(catalogPagination(params,0).size,30);
+console.log('PASS: catalog page sizes, rendered counts and boundary clamping');
+assert.equal((home().match(/class="product-card"/g)??[]).length,10);
