@@ -242,8 +242,9 @@ td code {white-space:nowrap}
 .featured-field {align-self:end;min-height:40px}
 .editor {max-width:930px}
 .editor-photo {width:115px;border-radius:10px}
-.variant-fields {display:grid;grid-template-columns:1.1fr 1.1fr .8fr .7fr .7fr;gap:8px;border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:0}
+.variant-fields {position:relative;display:grid;grid-template-columns:1.1fr 1.1fr .8fr .7fr .7fr;gap:8px;border:1px solid var(--line);border-radius:10px;padding:24px 10px 10px;margin-top:0}
 .variant-fields legend {padding-inline:5px}
+.variant-remove {position:absolute;top:-15px;right:10px;background:#fff}
 .reset-panel {margin-top:14px}
 .reset-panel button {margin-top:10px}
 @media (max-width:1050px) {

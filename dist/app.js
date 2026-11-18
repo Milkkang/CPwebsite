@@ -246,6 +246,13 @@ document.addEventListener('click', async event=>{
     try {await navigator.clipboard.writeText(code);message('Copied '+code+'.');}
     catch {message('Use coupon code '+code+' in your basket.');}
   } else if('addVariant' in data) {const error=extraVariant();if(error)message(error);}
+  else if('removeVariant' in data) {
+    button.closest('.variant-fields')?.remove();
+    document.querySelectorAll('#variant-fields .variant-fields').forEach((fieldset,i)=>{
+      fieldset.querySelector('legend').textContent='Variant '+(i+1);
+      fieldset.querySelector('[data-remove-variant]').setAttribute('aria-label','Delete variant '+(i+1));
+    });
+  }
   else if('stock' in data) {
     const row=getVariant(data.stock);
     if(row) showModal(stockEditor(data.stock,row.variant,row.product));

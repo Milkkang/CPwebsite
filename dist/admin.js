@@ -4,7 +4,7 @@ import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
 const nav=[['','Overview'],['revenue','Revenue'],['products','Products'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
-  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark">CP</span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Design preview</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
+  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Design preview</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
 }
 const heading=(title,subtitle='',actions='')=>'<div class="admin-heading"><div><h1>'+title+'</h1>'+(subtitle?'<p>'+subtitle+'</p>':'')+'</div><div class="button-row">'+actions+'</div></div>';
@@ -127,12 +127,12 @@ function productRows({p,variants}) {
     (i===0?'<td'+span+'>'+badge(p.status)+'</td><td'+span+'>'+link(editHref(p),'Edit ↗','text-link')+'</td>':'')+'</tr>').join('');
 }
 function variantFields(v={},i=0,p={}) {
-  return '<fieldset class="variant-fields"><legend>Variant '+(i+1)+'</legend><input type="hidden" name="oldSku" value="'+e(v.sku??'')+'">'+
-    field('Name','variantName',v.name??'Standard','required maxlength="60"')+
+  return '<fieldset class="variant-fields"><legend>Variant '+(i+1)+'</legend><button type="button" class="btn outline small variant-remove" data-remove-variant aria-label="Delete variant '+(i+1)+'">Delete variant</button><input type="hidden" name="oldSku" value="'+e(v.sku??'')+'">'+
+    field('Name','variantName',v.name??'','required maxlength="60"')+
     field('Variant SKU','variantSku',v.sku??'','required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+"')+
-    amountInput('Price (SGD)','variantPrice',v.price??0)+
-    field('Stock','variantStock',v.stock??0,'type="number" min="0" max="100000" step="1" required')+
-    field('Minimum qty','variantMin',v.min??1,'type="number" min="1" max="100000" step="1" required')+
+    field('Price (SGD)','variantPrice',v.price===undefined?'':(v.price/100).toFixed(2),'type="number" min="0" max="99999" step="0.01" required')+
+    field('Stock','variantStock',v.stock??'','type="number" min="0" max="100000" step="1" required')+
+    field('Minimum qty','variantMin',v.min??'','type="number" min="1" max="100000" step="1" required')+
     '<div class="variant-image-field"><span data-variant-photo>'+photo(p,'thumb',v)+'</span>'+
     field('Variant image URL','variantImage',v.image??'','maxlength="350" placeholder="https://…"')+'</div></fieldset>';
 }
@@ -270,8 +270,7 @@ export function storeProduct(form,values) {
   const p=findProduct(form.dataset.id), sku=values.get('sku').trim().toUpperCase();
   const image=values.get('image').trim();
   if(image&&!imageUrl(image)) return 'Enter a valid HTTPS image URL.';
-  if(!values.get('name').trim()||!values.get('brand').trim()) return 'Product name and brand are required.';
-  if(state.products.some(x=>x!==p&&x.sku===sku)) return 'That parent SKU already exists.';
+  if(!sku||!values.get('name').trim()||!values.get('brand').trim()) return 'Product name, brand and parent SKU are required.';
   const variantImages=values.getAll('variantImage');
   if(variantImages.some(url=>url.trim()&&!imageUrl(url))) return 'Enter a valid HTTPS URL for each variant image.';
   const variants=values.getAll('variantName').map((name,i)=>({
@@ -279,13 +278,30 @@ export function storeProduct(form,values) {
     price:moneyToCents(values.getAll('variantPrice')[i]),stock:Number(values.getAll('variantStock')[i]),
     min:Number(values.getAll('variantMin')[i]),image:variantImages[i]?.trim()??''
   }));
+  if(!variants.length) return 'Add at least one variant.';
   if(variants.some(v=>!v.name)) return 'Every variant needs a name.';
+  if(variants.some(v=>!/^[A-Z0-9_-]{1,32}$/.test(v.sku)||!Number.isSafeInteger(v.price)||v.price<0||!Number.isInteger(v.stock)||v.stock<0||!Number.isInteger(v.min)||v.min<1)) return 'Enter a valid SKU, price, stock and minimum quantity for every variant.';
   if(new Set(variants.map(v=>v.sku)).size!==variants.length || state.products.some(x=>x!==p&&x.variants.some(v=>variants.some(row=>row.sku===v.sku)))) return 'Every variant needs a unique SKU.';
-  const oldSkus=values.getAll('oldSku');
-  if(variants.some((v,i)=>oldSkus[i]&&oldSkus[i]!==v.sku&&state.orders.some(o=>o.items.some(item=>item.sku===oldSkus[i])))) return 'A variant SKU used in an order must stay the same.';
-  const valuesToStore={id:p?.id??sku,sku,name:values.get('name').trim(),brand:values.get('brand').trim(),category:values.get('category'),status:values.get('status'),
-    featured:values.has('featured'),description:values.get('description').trim(),keywords:values.get('keywords').trim(),image,original:values.get('original').trim(),r2:values.get('r2').trim(),variants};
-  if(p) Object.assign(p,valuesToStore); else state.products.push(valuesToStore);
+  if(p?.variants.some(old=>!variants.some(v=>v.sku===old.sku)&&state.orders.some(o=>o.items.some(item=>item.sku===old.sku)))) return 'A variant used in an order cannot be deleted or have its SKU changed.';
+  const baseName=values.get('name').trim(), oldOption=p?.variants[0]?.name;
+  const name=p&&oldOption&&baseName.endsWith(' · '+oldOption)?baseName.slice(0,-(' · '+oldOption).length):baseName;
+  const description=values.get('description').trim();
+  const baseDescription=p&&oldOption&&description.endsWith(' · '+oldOption)?description.slice(0,-(' · '+oldOption).length):description;
+  const next=variants.map((variant,index)=>{
+    const variantImage=variant.image||image;
+    return {id:variant.sku,sku:variant.sku,name:name+' · '+variant.name,brand:values.get('brand').trim(),category:values.get('category'),status:values.get('status'),
+      featured:values.has('featured')&&index===0,description:baseDescription?[baseDescription,variant.name].join(' · '):variant.name,
+      keywords:[values.get('keywords').trim(),variant.name].filter(Boolean).join(' '),image:variantImage,
+      original:variant.image||values.get('original').trim(),r2:variant.image||values.get('r2').trim(),variants:[variant]};
+  });
+  const index=p?state.products.indexOf(p):state.products.length;
+  state.products.splice(index,p?1:0,...next);
+  if(p) {
+    const validSkus=new Set(next.map(x=>x.sku));
+    for(const old of p.variants) if(!validSkus.has(old.sku)) delete state.cart[old.sku];
+    state.saved=state.saved.map(id=>id===p.id?next[0].id:id);
+    state.recentlyViewed=(state.recentlyViewed??[]).map(item=>item.id===p.id?{id:next[0].id,sku:next[0].sku}:item);
+  }
   save();
 }
 export function saveFulfilment(form,values,shipItem=false) {
@@ -363,18 +379,20 @@ export function importProducts(text) {
       (input.image&&!imageUrl(input.image))||
       (input.variant_image&&!imageUrl(input.variant_image))||
       (input.status&&!['Draft','Published','Archived'].includes(input.status))) throw Error('Check values in CSV row '+(i+2)+'. No changes were applied.');
-    if(seenVariants.has(variantSku)||next.some(p=>p.sku!==sku&&p.variants.some(v=>v.sku===variantSku))) throw Error('Duplicate variant SKU in row '+(i+2)+'.');
+    if(seenVariants.has(variantSku)) throw Error('Duplicate variant SKU in row '+(i+2)+'.');
     seenVariants.add(variantSku);
-    let p=next.find(p=>p.sku===sku);
-    if(!p){p={id:sku,sku,variants:[],status:'Draft',featured:false};next.push(p);}
-    Object.assign(p,{name:input.name,brand:input.brand,category:input.category});
-    for(const key of ['status','description','keywords','image','original','r2']) if(key in input&&(key!=='status'||input[key])) p[key]=input[key];
-    if('featured' in input) p.featured=input.featured.toLowerCase()==='true';
+    let p=next.find(p=>p.variants.some(v=>v.sku===variantSku));
     const variant={sku:variantSku,name:input.variant_name,price:moneyToCents(price),stock:units,min};
     if('variant_image' in input) variant.image=input.variant_image;
-    const v=p.variants.find(v=>v.sku===variantSku);
-    if(v) Object.assign(v,variant); else p.variants.push(variant);
-    touched.add(sku);
+    const withOption=value=>value.endsWith(' · '+variant.name)?value:value+' · '+variant.name;
+    const product={id:variantSku,sku:variantSku,name:withOption(input.name),brand:input.brand,category:input.category,
+      status:input.status||p?.status||'Draft',featured:'featured' in input?input.featured.toLowerCase()==='true':p?.featured??false,
+      description:input.description?withOption(input.description):variant.name,
+      keywords:[input.keywords,variant.name].filter(Boolean).join(' '),
+      image:variant.image||input.image||p?.image||'',original:variant.image||input.original||p?.original||'',
+      r2:variant.image||input.r2||p?.r2||'',variants:[variant]};
+    if(p) Object.assign(p,product); else next.push(product);
+    touched.add(variantSku);
   }
   state.products=next; save(); return touched.size;
 }

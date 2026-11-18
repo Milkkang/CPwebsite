@@ -20,8 +20,22 @@ export const imageUrl = value => {
   return /^(https:\/\/[^\s]+|assets\/[a-z0-9_-]+\.webp)$/i.test(url) ? url : '';
 };
 
+function splitProducts(products) {
+  return products.flatMap(product => product.variants.map((variant,index) => {
+    if(product.variants.length===1 && product.id===variant.sku) return product;
+    const image=variant.image||product.image;
+    return {
+      ...product,id:variant.sku,sku:variant.sku,
+      name:product.name+' · '+variant.name,
+      description:product.description+' · '+variant.name,
+      keywords:[product.keywords,variant.name].filter(Boolean).join(' '),
+      image,original:image,r2:image,featured:Boolean(product.featured&&index===0),
+      variants:[{...variant}]
+    };
+  }));
+}
 function demoData() {
-  const products = structuredClone(catalogProducts);
+  const products = splitProducts(catalogProducts);
   return {
     products,orders:[],cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
     settings:{shipping:390,threshold:5000,support:'hello@cpvaluemart.com'},
@@ -37,6 +51,15 @@ try {
   localStorage.removeItem('cvm-preview-2026-v2');
   const stored=JSON.parse(localStorage.getItem(key));
   state=stored?.products && stored?.settings && stored?.orders ? stored : demoData();
+  if(state.products.some(p=>p.variants.length!==1||p.id!==p.variants[0].sku)) {
+    const oldProducts=state.products;
+    const firstSku=new Map(oldProducts.map(p=>[p.id,p.variants[0]?.sku]));
+    state.products=splitProducts(oldProducts);
+    state.saved=(state.saved??[]).map(id=>firstSku.get(id)??id).filter(Boolean);
+    state.recentlyViewed=(state.recentlyViewed??[]).map(item=>({id:item.sku??firstSku.get(item.id)??item.id,sku:item.sku}));
+    for(const order of state.orders) for(const item of order.items) item.productId=item.sku;
+    save();
+  }
 } catch { state=demoData(); }
 export function save() {
   try { localStorage.setItem(key,JSON.stringify(state)); } catch {}

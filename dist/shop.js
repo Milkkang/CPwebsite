@@ -77,14 +77,14 @@ const categoryIcon = id => {
 };
 const categoriesGrid = () => '<div class="cat-grid">'+categories.map(([id,name,symbol,tone])=>go('/category/'+id,'<span class="cat-icon '+tone+'">'+categoryIcon(id)+'</span><b>'+e(name)+'</b>','cat-card')).join('')+'</div>';
 export function card(p,{quickAdd=false}={}) {
-  const saved=state.saved.includes(p.id), variant=p.variants.find(v=>v.stock>=v.min);
+  const saved=state.saved.includes(p.id), variant=p.variants.find(v=>v.stock>=v.min), single=p.variants.length===1;
   const direct=quickAdd&&variant;
   const add=direct?'<button type="button" class="add-btn" data-quick-add="'+e(variant.sku)+'" aria-label="Add '+e(p.name)+' ('+e(variant.name)+') to basket">+</button>':
     go('/product/'+p.id,'<span aria-hidden="true">+</span><span class="sr-only">Choose options for '+e(p.name)+'</span>','add-btn');
   return '<article class="product-card">'+photo(p,'card-photo')+
     '<button class="save-btn '+(saved?'saved':'')+'" data-save="'+e(p.id)+'" aria-pressed="'+saved+'" aria-label="Save '+e(p.name)+'">'+icon('heart')+'</button>'+
     '<div class="product-info"><span class="subtle">'+e(p.brand)+'</span><h3>'+go('/product/'+p.id,e(p.name))+'</h3>'+
-    '<div class="price-row"><span><small>'+(direct?e(variant.name):'From')+'</small> <strong>'+cash(direct?variant.price:productPrice(p))+'</strong></span>'+
+    '<div class="price-row"><span>'+(single?'':'<small>'+(direct?e(variant.name):'From')+'</small> ')+'<strong>'+cash(direct?variant.price:productPrice(p))+'</strong></span>'+
     (variant?add:'<span class="subtle">Sold out</span>')+'</div></div></article>';
 }
 export const grid = (rows,options) => '<div class="product-grid">'+rows.map(product=>card(product,options)).join('')+'</div>';
@@ -92,9 +92,7 @@ export function home() {
   const featured=state.products.filter(p=>p.featured&&p.status==='Published').slice(0,8);
   const visual=featured.slice(0,3).map((p,i)=>'<figure class="hero-tile tile-'+i+'"><img src="'+e(imageUrl(p.image))+'" alt=""></figure>').join('');
   return '<section class="hero"><div class="hero-copy"><p class="overline">CP VALUE MART · SINGAPORE</p><h1>Everyday essentials,<br>within easy reach.</h1><p class="hero-desc">Shop personal care, household favourites and pantry staples in one place.</p><div class="button-row">'+go('/shop','Shop all products <span>↗</span>','btn primary')+go('/offers','View offers','btn outline')+'</div></div><div class="hero-media" aria-hidden="true">'+visual+'</div></section>'+
-    '<div class="feature-strip"><div>'+icon('truck')+'<span><b>Islandwide delivery</b><small>Singapore addresses</small></span></div><div>'+icon('box')+'<span><b>Shop by brand</b><small>Filter within any category</small></span></div><div>'+icon('bag')+'<span><b>Free delivery from '+cash(state.settings.threshold)+'</b><small>'+cash(state.settings.shipping)+' on smaller orders</small></span></div></div>'+
     '<section class="section"><div class="section-title"><h2>Shop by category</h2>'+go('/categories','View all categories ↗','text-link')+'</div>'+categoriesGrid()+'</section>'+
-    '<section class="section promo-row"><article class="promo lilac"><div><h2>Personal care</h2>'+go('/category/personal-care','Explore favourites ↗','text-link')+'</div><span aria-hidden="true">✳</span></article><article class="promo peach"><div><h2>Home cleaning</h2>'+go('/category/home-cleaning','Shop household essentials ↗','text-link')+'</div><span aria-hidden="true">◈</span></article><article class="promo blue"><div><h2>Store offers</h2>'+go('/offers','See available coupons ↗','text-link')+'</div><span aria-hidden="true">✦</span></article></section>'+
     '<section class="section"><div class="section-title"><h2>Everyday favourites</h2>'+go('/shop','Browse all products ↗','text-link')+'</div>'+(featured.length?grid(featured,{quickAdd:true}):empty('No featured products','Browse the full assortment.',go('/shop','Shop all','btn primary')))+'</section>';
 }
 export const allCategories=()=>crumb('Categories')+'<div class="page-title"><h1>Shop by category</h1></div>'+categoriesGrid();
@@ -120,7 +118,7 @@ export function detail(p, params) {
   const related=state.products.filter(x=>x.id!==p.id&&x.status==='Published'&&x.category===p.category).slice(0,4);
   return crumb(go('/category/'+p.category,e(categoryName(p.category))),e(p.name))+
     '<section class="detail">'+photo(p,'detail-photo',v)+'<div class="detail-copy"><div class="overline">'+e(p.brand)+'</div><h1>'+e(p.name)+'</h1><p class="detail-price">'+cash(v.price)+'</p><p>'+e(p.description)+'</p>'+
-    '<fieldset><legend>Pack size</legend><div class="variant-row">'+p.variants.map(row=>'<span class="variant-choice">'+photo(p,'variant-thumb',row)+link(href('/product/'+p.id,{sku:row.sku}),e(row.name),'btn '+(row.sku===v.sku?'chosen':'outline'))+'</span>').join('')+'</div></fieldset>'+
+    (p.variants.length>1?'<fieldset><legend>Pack size</legend><div class="variant-row">'+p.variants.map(row=>'<span class="variant-choice">'+photo(p,'variant-thumb',row)+link(href('/product/'+p.id,{sku:row.sku}),e(row.name),'btn '+(row.sku===v.sku?'chosen':'outline'))+'</span>').join('')+'</div></fieldset>':'')+
     '<p class="stock-note">'+(available?v.stock+' in stock · Minimum '+v.min:'Currently unavailable')+' <span>SKU '+e(v.sku)+'</span></p>'+
     '<form id="add-to-cart" data-sku="'+e(v.sku)+'" class="button-row"><label class="qty-label">Qty <input aria-label="Quantity" name="qty" type="number" min="'+v.min+'" max="'+v.stock+'" value="'+v.min+'" required '+(available?'':'disabled')+'></label><button class="btn primary" '+(available?'':'disabled')+'>Add to basket</button><button type="button" class="btn outline" data-save="'+e(p.id)+'" aria-pressed="'+state.saved.includes(p.id)+'">'+icon('heart')+' '+(state.saved.includes(p.id)?'Saved':'Save')+'</button></form>'+
     '<div class="detail-delivery">'+icon('truck')+' '+go('/delivery','Singapore delivery · Details')+'</div></div></section>'+
