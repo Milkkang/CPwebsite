@@ -1,6 +1,6 @@
 # Phase 4 acceptance — shared storefront and shopping data
 
-Status: **deployed; manual acceptance in progress**. A local follow-up commit is awaiting explicit publication approval. Do not begin Phase 5 before the user explicitly replies `Approved Phase 4`.
+Status: **approved with one manual check deferred**. On 2026-11-19, the user replied `Approved Phase 4` and asked to skip the offline admin save check for now. This is a user-directed exception to that Phase 4 check, not a passing test result.
 
 ## Release
 
@@ -9,7 +9,7 @@ Status: **deployed; manual acceptance in progress**. A local follow-up commit is
 - Cloudflare Worker deployment `9e044223-f886-4534-b9dd-2b5286cde720`, version `2421e0ff-5f3e-4dfa-abf2-81db12d56712`, 100% as of 12:25:53 UTC on 2026-11-18.
 - Production domain: [cpvaluemart.com](https://cpvaluemart.com).
 - PR [#9](https://github.com/Milkkang/CPwebsite/pull/9) published the acceptance hotfix. Its head was `406abd75170c3a4f34140f37dd99146a3a959309`; GitHub Phase checks run `44411608177` (run 48) passed; merge commit `1114469b18e3a0ab3627b6ff674b3a6ea4c9c7f0` deployed as Worker deployment `1dea5ef1-cab4-4739-907e-181473d5a2f4`, version `3aed83ce-384f-431c-bd53-0baf8cd6ce60`, at 100%.
-- Local follow-up commit `56ec9dc` fixes recent-product recording after the asynchronous product detail has loaded. It passes 29 tests and the full build but is awaiting explicit publication approval.
+- PR [#10](https://github.com/Milkkang/CPwebsite/pull/10) published the recent-history follow-up. Its head was `0b5ec5e61de68be2c8023373022c3c78f0277cde`; GitHub Phase checks run `44413811409` (run 52) passed; merge commit `8c5f267ef892359cd252dbd90ed3cb18ca4f34e7` deployed as Worker deployment `b31c2b38-2dd6-46b9-aee4-7da38399a985`, version `0f08c1dd-ac6d-4b30-9eed-ca8a6d21b52a`, at 100%.
 
 ## Data changes
 
@@ -34,9 +34,9 @@ Status: **deployed; manual acceptance in progress**. A local follow-up commit is
 ## Manual acceptance
 
 1. **Passed:** a temporary homepage heading change was saved in the admin browser, appeared in the second browser after refresh, and was restored to the original text.
-2. **In progress:** the deployed cache fix loaded the current storefront in both browsers. A saved item and cart change reached the member shopping API, but opening a product detail did not write recent history. The cause was that the loading render marked the product as already viewed before API data arrived. Local commit `56ec9dc` fixes this state transition; repeat saved, recent and cart UI checks after deployment. The test saved item was removed and its cart quantity was restored.
+2. **Passed:** after PR #10 deployed, browser A saved the test product, changed its cart quantity and opened its detail page. After refresh, browser B showed the same saved item, cart quantity and recently viewed product. The test saved item and cart increment were removed afterward; the natural recently viewed entry remains.
 3. **Passed:** Chrome added the published test product as a signed-out guest. After sign-in, both authenticated browser sessions returned the merged member cart and the test SKU quantity included the guest addition. The test quantity was restored to its pre-test value. The server-side merge function's rollback verification separately covers unavailable and invalid quantities.
-4. **Pending:** an offline admin save must report failure, followed by a successful retry after network recovery.
+4. **Deferred at the user's request:** the offline admin save and online retry were not manually exercised. On 2026-11-19, the user explicitly approved Phase 4 and subsequently asked to skip this check for now. The code path reports success only after the API returns successfully, but this does not establish actual offline browser behavior. Revisit the check during Phase 8 end-to-end acceptance.
 
 ## Scope and recovery
 
