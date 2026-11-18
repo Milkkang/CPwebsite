@@ -34,6 +34,7 @@ saved=state.products.find(row=>row.id===p.id);
 assert.equal(saved.image,'https://example.com/explicit-variant.jpg');
 assert.ok(!productEditor(p.id).includes('Image references'));
 assert.match(productEditor(p.id),/R2 image URL/);
+assert.match(productEditor(p.id),/name="name"[^>]*maxlength="500"/);
 assert.equal((productEditor('new').match(/<fieldset/g)??[]).length,1);
 assert.ok(!productEditor('new').includes('data-add-variant'));
 console.log('PASS: inline persistence and validation; R2 replacement; explicit variant override; editor fields');
