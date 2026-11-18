@@ -1,6 +1,6 @@
 # Phase 1 — 后端骨架与部署流程
 
-日期：2026-11-18。当前状态：待线上验收；不会进入 Phase 2，直到验收通过且用户明确 Approved Phase 1。
+日期：2026-11-18。当前状态：技术验收通过，等待用户验收并明确 Approved Phase 1；未进入 Phase 2。
 
 ## 交付内容
 
@@ -18,9 +18,10 @@
 | API 单元测试 | 本地 4 项通过：健康检查、方法/API 边界、静态转发、日志脱敏 |
 | 原商品回归 | 通过：编辑持久化及验证、R2 替换、首页设置、分类、30/50/100 分页 |
 | 生产构建 | 本地通过；全部原有页面及图片字节一致；ASSETS 和 /api 路由配置验证通过 |
-| GitHub 分支检查 | 待执行 |
-| 正式域名及 API | 待部署验证 |
-| 线上回滚演练 | 待执行 |
+| GitHub 分支检查 | 通过：[PR #1](https://github.com/Milkkang/CPwebsite/pull/1)、[Actions run 44250870224](https://github.com/Milkkang/CPwebsite/actions/runs/44250870224)，npm ci/test/build 全部成功 |
+| 正式域名及 API | 通过：https://cpvaluemart.com/api/health 200；未知 API 404 JSON；POST health 405；首页 SHA-256 与原版一致 |
+| 正式浏览器验收 | 通过：1182×1371 桌面首页 10 产品/5 列，列表 30/50/100、翻页及刷新、分类直接加购、商品页；390×844 手机无横向溢出；无 pageerror |
+| 线上回滚演练 | 通过：旧版本 100% 后 health 404、首页哈希一致；恢复新版本 100% 后 health 200。回滚部署 9d03ea3b-a1ca-4284-a918-a44c7d0a6f5f；恢复部署 34ec0d6c-3a21-4458-85f4-8b0312d465b7 |
 
 健康接口只证明 Worker 在运行，不声称 Supabase/Resend/Stripe 已接通。
 
@@ -45,4 +46,19 @@
 3. 持久代码回退：使用 Git revert 还原本阶段合并提交并通过 PR；同时恢复 Builds build command 为空，deploy command 为 npx wrangler deploy，避免旧代码使用新构建命令。
 4. 恢复本阶段：将验证过的本阶段 Worker 版本重新部署至 100%，并检查首页和 /api/health。
 
-发布证据与最终版本在验收完成后补充。
+## 发布证据
+
+- 功能提交：258d95d76debf456c33b6d4ce5ebfc94d9a4a2fb；合并提交：96dbc0c59d64ed18ab22effdfca8961e806be78f。
+- Cloudflare Builds：7273ab57-feb9-4c64-be1e-d77a322b30f1，success；Node 24.22.1；测试、构建、部署成功。
+- Worker 功能版本：edb7a92c-3ae0-480d-8e9d-a78e2cac1018，演练后恢复 100%。
+- 首页 SHA-256：3cebc4a6169c356d295419a642d85891047deac2546d7a40ccf3c1af60ca9a6f，部署前/后/回滚一致。
+- 线上运行设置核验：ASSETS 绑定存在；redact_query_string=true；invocation_logs=false；无运行时 Secret。
+- 后续仅 docs/** 验收记录变化不触发 Cloudflare 重复发布；功能提交及线上资源不变。
+
+## 下一步人工凭据配置
+
+现在 Worker 已有后端代码，可在 Cloudflare cpwebsite → Settings 找到运行时 Variables and Secrets（避开 Builds）。按 Phase 0 顺延事项配置 SUPABASE_SECRET_KEY、RESEND_API_KEY、STRIPE_SECRET_KEY；最后一项只能使用 sandbox/test key。保存时不要将值发到聊天。只核验名称不读取值；Auth/SMTP 和 webhook 在对应阶段验收。当前健康检查不依赖这些凭据，因此不以 200 推断服务接通。
+
+## 参考
+
+Cloudflare 当前配置指引：https://developers.cloudflare.com/cf/agents/ 、https://developers.cloudflare.com/cf/projects/cloudflare-config/ 。回滚边界：https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/ 。
