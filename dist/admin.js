@@ -168,7 +168,7 @@ export function productEditor(id) {
   const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]};
   return go('/admin/products','← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
     '<form id="product-editor" data-id="'+e(existing?.id??'')+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
-    field('Product name','name',p.name,'required maxlength="120"')+field('Brand','brand',p.brand,'required maxlength="70"')+
+    field('Product name','name',p.name,'required maxlength="500"')+field('Brand','brand',p.brand,'required maxlength="70"')+
     field('Parent SKU','sku',p.sku,'required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+" '+(existing?'readonly':''))+
     '<label>Category<select name="category">'+cats(p.category)+'</select></label><label>Status<select name="status">'+opts(['Draft','Published','Archived'],p.status)+'</select></label>'+
     '<label class="check-label featured-field"><input type="checkbox" name="featured"'+checked(p.featured)+'> Feature on homepage</label></div>'+
