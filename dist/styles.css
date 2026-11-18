@@ -499,3 +499,6 @@ button.photo:disabled {opacity:1;cursor:default}
   .revenue-date-form input[type="date"] {min-width:0;width:100%}
   .revenue-date-form .btn {justify-self:start}
 }
+
+.homepage-category-options .check-label {display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:44px}
+.homepage-category-options input[type="checkbox"] {width:18px;height:18px;flex:0 0 18px;margin:0}
