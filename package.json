@@ -1,0 +1,19 @@
+{
+  "name": "cpwebsite",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/worker.test.mjs && node tests/product-editing.mjs",
+    "build": "cf build && node scripts/check-build.mjs",
+    "dev": "cf dev",
+    "deploy": "cf deploy --prebuilt --no-provision --force"
+  },
+  "devDependencies": {
+    "cf": "1.0.0-rc.1",
+    "@cloudflare/vite-plugin": "2.0.0-rc.1",
+    "vite": "8.3.8"
+  },
+  "engines": {
+    "node": "^22.23.0 || ^24.22.0 || ^26.12.0"
+  }
+}

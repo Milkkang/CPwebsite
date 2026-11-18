@@ -33,3 +33,24 @@ Run the product editing regression checks with Node.js:
 ```sh
 node tests/product-editing.mjs
 ```
+
+## Phase 1 backend and deployment
+
+Install with `npm ci` using Node 22.23+ (22.x), 24.22+ (24.x), or 26.12+ (26.x).
+`npm test` runs API and storefront regression checks. `npm run build` packages the
+Worker and verifies that every existing storefront asset is copied byte for byte.
+`npm run dev` runs the Worker and storefront locally.
+
+Cloudflare Builds deploys `main` to the existing `cpwebsite` Worker. Build command:
+`npm test && npm run build`; deploy command: `npm run deploy` (uses verified prebuilt output).
+GitHub pull requests run the same checks before merge. Configuration is in
+`cloudflare.config.ts`; the front end remains vanilla JavaScript in `dist/`.
+
+`GET /api/health` is a liveness check, not a database/payment readiness check.
+All other `/api/*` routes currently return JSON 404. Business data still uses the
+existing browser-local preview implementation until later phases.
+
+Configure runtime secrets in Cloudflare Worker Settings → Variables and Secrets,
+never Builds variables. Do not commit `.env`, `.dev.vars`, secret values, tokens,
+or database exports. No service secret is needed for this phase's liveness API.
+See `docs/phase-1-acceptance.md` for validation, limitations and recovery.
