@@ -48,7 +48,7 @@ export function orderItemLabel(item,showRating=false) {
   return productLabel(p,'<b>'+e(item.name)+'</b><small>'+e(item.option)+' × '+item.qty+'</small>'+(showRating&&item.review?'<small>Rated '+e(item.review.rating)+'/5</small>':''),v);
 }
 export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="item-previews">'+items.map(item=>'<li>'+orderItemLabel(item,showRating)+'</li>').join('')+'</ul>';
-const logo=()=>go('/','<span class="mark" aria-hidden="true">CP</span><span>CP <b>Value Mart</b></span>','logo');
+const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
 export function shopFrame(body, query='') {
   const items=Object.values(state.cart).reduce((a,b)=>a+b,0);
   return '<div class="topline"><span>DESIGN PREVIEW</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
