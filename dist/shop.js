@@ -78,7 +78,7 @@ const categoryIcon = id => {
 const categoriesGrid = (rows=categories) => '<div class="cat-grid">'+rows.map(([id,name,symbol,tone])=>go('/category/'+id,'<span class="cat-icon '+tone+'">'+categoryIcon(id)+'</span><b>'+e(name)+'</b>','cat-card')).join('')+'</div>';
 export function card(p,{quickAdd=false}={}) {
   const saved=state.saved.includes(p.id), variant=p.variants.find(v=>v.stock>=v.min), single=p.variants.length===1;
-  const direct=quickAdd&&variant;
+  const direct=(quickAdd||single)&&variant;
   const add=direct?'<button type="button" class="add-btn" data-quick-add="'+e(variant.sku)+'" aria-label="Add '+e(p.name)+' ('+e(variant.name)+') to basket">+</button>':
     go('/product/'+p.id,'<span aria-hidden="true">+</span><span class="sr-only">Choose options for '+e(p.name)+'</span>','add-btn');
   return '<article class="product-card">'+photo(p,'card-photo')+
