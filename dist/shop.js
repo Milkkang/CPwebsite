@@ -89,7 +89,8 @@ export function card(p,{quickAdd=false}={}) {
 }
 export const grid = (rows,options) => '<div class="product-grid">'+rows.map(product=>card(product,options)).join('')+'</div>';
 export function home() {
-  const featured=state.products.filter(p=>p.featured&&p.status==='Published').slice(0,8);
+  const published=state.products.filter(p=>p.status==='Published');
+  const featured=[...published.filter(p=>p.featured),...published.filter(p=>!p.featured)].slice(0,10);
   const config=homepageSettings();
   const heroProducts=config.heroProductIds.length?config.heroProductIds.map(findProduct).filter(p=>p?.status==='Published').slice(0,3):featured.slice(0,3);
   const shownCategories=categories.filter(([id])=>config.categoryIds.includes(id));
@@ -99,6 +100,22 @@ export function home() {
     '<section class="section"><div class="section-title"><h2>Everyday favourites</h2>'+go('/shop','Browse all products ↗','text-link')+'</div>'+(featured.length?grid(featured,{quickAdd:true}):empty('No featured products','Browse the full assortment.',go('/shop','Shop all','btn primary')))+'</section>';
 }
 export const allCategories=()=>crumb('Categories')+'<div class="page-title"><h1>Shop by category</h1></div>'+categoriesGrid();
+export function catalogPagination(params,total) {
+  const size=[30,50,100].includes(Number(params.get('size')))?Number(params.get('size')):30;
+  const pages=Math.max(1,Math.ceil(total/size));
+  const requested=Number(params.get('page'));
+  const page=Math.min(pages,Number.isSafeInteger(requested)&&requested>0?requested:1);
+  return {size,pages,page,start:(page-1)*size};
+}
+function pagination(path,params,paging,total) {
+  const {size,pages,page,start}=paging;
+  const pageLink=(n,label)=>link(href(path,{...Object.fromEntries(params),size,page:n}),label,'btn outline small');
+  const numbers=[...new Set([1,pages,page-1,page,page+1].filter(n=>n>=1&&n<=pages))].sort((a,b)=>a-b);
+  return '<nav class="catalog-pagination" aria-label="Product pages"><p>Showing '+(total?start+1:0)+'–'+Math.min(start+size,total)+' of '+total+' products · Page '+page+' of '+pages+'</p><div class="pagination-links">'+
+    (page>1?pageLink(page-1,'← Previous'):'<span class="btn outline small" aria-disabled="true">← Previous</span>')+
+    numbers.map((n,i)=>(i&&n-numbers[i-1]>1?'<span aria-hidden="true">…</span>':'')+(n===page?'<span class="btn primary small" aria-current="page">'+n+'</span>':pageLink(n,String(n)))).join('')+
+    (page<pages?pageLink(page+1,'Next →'):'<span class="btn outline small" aria-disabled="true">Next →</span>')+'</div></nav>';
+}
 export function catalog(path,params,id='') {
   const q=params.get('q')??'', brand=params.get('brand')??'', sort=params.get('sort')??'featured';
   const all=matching(q).filter(p=>!id||p.category===id);
@@ -106,14 +123,15 @@ export function catalog(path,params,id='') {
   const rows=all.filter(p=>!brand||p.brand===brand).sort((a,b)=>
     sort==='price-up'?productPrice(a)-productPrice(b):sort==='price-down'?productPrice(b)-productPrice(a):
     sort==='name'?a.name.localeCompare(b.name):Number(b.featured)-Number(a.featured));
+  const paging=catalogPagination(params,rows.length);
   const title=q?'Search results':id?categoryName(id):'All products';
   return crumb(e(title))+'<div class="page-title"><h1>'+e(title)+'</h1><p>'+rows.length+' product'+(rows.length===1?'':'s')+(q?' for “'+e(q)+'”':'')+'</p></div>'+
     '<div class="filters"><label>Category <select id="category-filter"><option value="#/shop">All categories</option>'+
     categories.map(([cat,name])=>'<option value="'+e(href('/category/'+cat,q?{q}:{}))+'"'+selected(cat,id)+'>'+e(name)+'</option>').join('')+'</select></label>'+
     '<form id="catalog-filters" data-path="'+e(path)+'"><input type="hidden" name="q" value="'+e(q)+'"><label>Brand <select name="brand"><option value="">All brands</option>'+
     brands.map(b=>'<option'+selected(b,brand)+'>'+e(b)+'</option>').join('')+'</select></label><label>Sort by <select name="sort">'+
-    [['featured','Featured'],['price-up','Price · low to high'],['price-down','Price · high to low'],['name','Name · A to Z']].map(([k,v])=>'<option value="'+k+'"'+selected(k,sort)+'>'+v+'</option>').join('')+'</select></label></form></div>'+
-    (rows.length?grid(rows):empty('No matching products','Try another keyword, or browse all products.',go('/shop','Shop all','btn primary')));
+    [['featured','Featured'],['price-up','Price · low to high'],['price-down','Price · high to low'],['name','Name · A to Z']].map(([k,v])=>'<option value="'+k+'"'+selected(k,sort)+'>'+v+'</option>').join('')+'</select></label><label>Products per page <select name="size">'+[30,50,100].map(size=>'<option value="'+size+'"'+selected(size,paging.size)+'>'+size+'</option>').join('')+'</select></label></form></div>'+
+    (rows.length?grid(rows.slice(paging.start,paging.start+paging.size)):empty('No matching products','Try another keyword, or browse all products.',go('/shop','Shop all','btn primary')))+pagination(path,params,paging,rows.length);
 }
 export function detail(p, params) {
   if(!p||p.status!=='Published') return missing();
