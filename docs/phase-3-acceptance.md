@@ -1,6 +1,6 @@
 # Phase 3 — 会员与管理员鉴权
 
-状态：进行中，未通过，不进入 Phase 4。Phase 2 已获 Approved Phase 2。
+状态：代码已部署，自动及权限测试通过；等待用户真实注册、验证、登录与密码重置。Phase 3 尚未通过，不进入 Phase 4。
 
 ## 配置核对
 
@@ -34,10 +34,10 @@ GET/POST /api/profile；GET/POST /api/addresses；POST /api/addresses/:id（acti
 | 单元/原商品回归 | 本地 18 项 + 原商品回归通过 |
 | 真实 Workers 运行时 | 通过：目录请求、重定向拒绝、Auth AES-GCM 会话、回调 HTML/安全响应头两项 workerd 测试 |
 | 数据库 RLS / 双用户 / 撤销 | 通过：迁移 20261118074149；两用户隔离、禁止转移所有权、metadata 伪管理员无效、私有会话不可读、Auth 撤销后旧 JWT 无效、限流；夹具全部回滚 |
-| GitHub 分支检查 | 首轮通过 [Actions 44260687108](https://github.com/Milkkang/CPwebsite/actions/runs/44260687108)，最终迁移文件名与远端记录对齐 |
-| 正式域名部署与桌面/手机 | 待执行 |
+| GitHub 分支检查 | 最终通过 [Actions 44262412099](https://github.com/Milkkang/CPwebsite/actions/runs/44262412099)，18 项单元及两项真实运行时测试通过 |
+| 正式域名部署与桌面/手机 | 通过：正式回调 200 无跳转，令牌从地址栏移除；桌面及 390×844 注册表单正常显示，原购物车保留 |
 | 注册真实送达及验证 | 待用户自行输入密码，测试只发 milkkang93@gmail.com |
-| 错误/过期链接及错误密码 | 待线上验收 |
+| 错误/过期链接及错误密码 | 通过：正式 Auth 无效令牌 400、错误密码 401；无效链接页可重发；失效令牌的前端回归通过 |
 | 密码重置真实送达及改密 | 待用户自行输入新密码 |
 | 首位管理员 | 未授予；只能在指定邮箱被 Auth 验证后授予 |
 
@@ -62,3 +62,15 @@ Supabase security advisor 无 ERROR/WARN；6 个 INFO 为 server_sessions/auth_r
 首轮线上检查发现 ASSETS.fetch('/index.html') 在生产会规范化为根路径 307；回调已改为直接取得根路径 HTML，避免丢失 TokenHash 流程。真实 workerd 测试模拟该 307，确保回调仍返回 200 且含 no-store/no-referrer/CSP。INVALID_LINK 会清除内存中的失效回调并显示可用重发入口，瞬时网络错误则保留令牌供重试。
 
 正式 API 已验证：服务端 Secret 能读取受限身份 RPC；匿名私有数据/后台 401，伪造会话不返回身份；错误密码 401、无效 TokenHash 400、跨站 POST 403。以上没有调用发送邮件接口。邮件实际送达、本人密码及管理员授予仍未验收。
+
+## 本轮部署与人工验收入口
+
+- 主实现 [PR #4](https://github.com/Milkkang/CPwebsite/pull/4)，合并 80c0cea0e742cb259e76f8d64e74215f5b0ed897。
+- 回调修复 [PR #5](https://github.com/Milkkang/CPwebsite/pull/5)，最终提交 81d04cfa3b432f8a49245b6ee4ff3a6a8842f229，合并 43ceb9bc1bce8a6c0e60caf1bd5ec58074490de7。
+- Cloudflare Builds 2b035e9a-6980-46a7-ba0f-1547ccb06796：success。
+- Worker 33d10c82-5227-46a2-a1c6-8bb36164c706，100%；deployment a2c8b55e-8ce8-4e7b-bd4d-52360cbddffb。
+- 回调 CSP 有意阻止自动注入的第三方 analytics beacon；DevTools 会显示该脚本被拦截，不放宽策略让分析脚本接触令牌地址，不影响账户表单。
+
+正式入口：[注册](https://cpvaluemart.com/#/account?mode=register)、[登录](https://cpvaluemart.com/#/account)、[密码重置请求](https://cpvaluemart.com/#/account?mode=recover)。
+
+用户在正式注册页自行填写姓名和 12–128 字符密码并提交，验收仅用 milkkang93@gmail.com，不把密码或令牌发到聊天。邮件真实送达并完成邮箱验证后，再核验 Auth verified 状态并授予首位管理员；随后完成登录刷新、退出、资料地址保存、重置邮件与用户自行改密。尚未完成这些人工验收项，不请求 Approved Phase 3。
