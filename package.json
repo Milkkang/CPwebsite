@@ -3,16 +3,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs && node tests/product-editing.mjs",
+    "test": "node --test tests/worker.test.mjs tests/catalog-api.test.mjs tests/import.test.mjs && node tests/product-editing.mjs",
     "build": "cf build && node scripts/check-build.mjs",
     "dev": "cf dev",
     "deploy": "cf deploy --prebuilt --no-provision --force",
-    "data:prepare": "node scripts/migration/prepare.mjs"
+    "data:prepare": "node scripts/migration/prepare.mjs",
+    "test:runtime": "node --test tests/worker-runtime.test.mjs"
   },
   "devDependencies": {
     "cf": "1.0.0-rc.1",
     "@cloudflare/vite-plugin": "2.0.0-rc.1",
-    "vite": "8.3.8"
+    "vite": "8.3.8",
+    "miniflare": "5.20261117.0-beta"
   },
   "engines": {
     "node": "^22.23.0 || ^24.22.0 || ^26.12.0"

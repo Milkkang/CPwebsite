@@ -18,7 +18,7 @@ test('one read-only RPC per listing request uses only publishable privileges', a
     assert.equal(url,env.SUPABASE_URL+'/rest/v1/rpc/read_catalog');
     assert.equal(options.headers.apikey,env.SUPABASE_PUBLISHABLE_KEY);
     assert.equal(JSON.stringify(options).includes(env.SUPABASE_SECRET_KEY),false);
-    assert.equal(options.redirect,'error');
+    assert.equal(options.redirect,'manual');
     assert.equal(JSON.parse(options.body).p_query,'(name.eq.secret),status.eq.Draft');
     return Response.json({products:[],pagination:{total:0,totalPages:1,page:1,pageSize:30}});
   },async()=>{

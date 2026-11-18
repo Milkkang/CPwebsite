@@ -28,7 +28,7 @@ async function database(env, path, options = {}) {
     throw new ApiError(503, 'CATALOG_UNAVAILABLE', 'Catalog is temporarily unavailable.');
   try {
     const response = await fetch(env.SUPABASE_URL + '/rest/v1/' + path, {
-      ...options, redirect: 'error', signal: AbortSignal.timeout(8000),
+      ...options, redirect: 'manual', signal: AbortSignal.timeout(8000),
       headers: { apikey: env.SUPABASE_PUBLISHABLE_KEY, 'Content-Type': 'application/json' }
     });
     if (!response.ok) throw Error('Database request failed');
