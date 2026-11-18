@@ -101,6 +101,52 @@ test('default address mutations derive ownership from the session and reject ano
  });
 });
 
+test('shopping writes use the verified session owner and reject invalid guest or cross-site requests',async()=>{
+ const cookie='__Host-cvm-session='+'9'.repeat(64);let setBody;
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:false,recoveryOnly:false});
+  if(url.includes('set_member_cart')){setBody=JSON.parse(options.body);return Response.json({sku:'SKU_1',quantity:2});}
+  if(url.includes('read_member_shopping'))return Response.json({cart:[],saved:[],recent:[]});
+  throw Error('Unexpected database request');
+ },async()=>{
+  assert.equal((await run('/api/shopping')).status,401);
+  assert.equal((await run('/api/shopping',{action:'cart',sku:'SKU_1',quantity:2},{origin:'https://attacker.example',cookie})).status,403);
+  assert.equal((await run('/api/shopping',{action:'cart',sku:'SKU_1',quantity:2,user_id:'another-user'},{cookie})).status,400);
+  assert.equal((await run('/api/shopping',{action:'cart',sku:'SKU_1',quantity:2},{cookie})).status,200);
+  assert.deepEqual(setBody,{p_user:userId,p_sku:'SKU_1',p_quantity:2});
+  assert.equal((await run('/api/shopping',{action:'cart',sku:'SKU_1',quantity:-1},{cookie})).status,400);
+  assert.equal((await run('/api/shopping',undefined,{cookie})).status,200);
+ });
+});
+
+test('admin product mutations bind actor and version to the verified admin session',async()=>{
+ const cookie='__Host-cvm-session='+'8'.repeat(64);let write;
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:true,recoveryOnly:false});
+  if(url.includes('admin_write_product')){write=JSON.parse(options.body);return Response.json({sku:'SKU_1',version:5});}
+  throw Error('Unexpected database request');
+ },async()=>{
+  const payload={sku:'SKU_1',version:4,fields:{price_cents:499},stock:10};
+  const response=await run('/api/admin/products',payload,{cookie});
+  assert.equal(response.status,200);
+  assert.deepEqual(write,{p_actor:userId,p_sku:'SKU_1',p_expected_version:4,p_fields:{price_cents:499},p_stock:10});
+  assert.equal((await run('/api/admin/products',{...payload,fields:{admin_roles:'all'}},{cookie})).status,400);
+  assert.equal((await run('/api/admin/products',payload)).status,401);
+ });
+});
+
+test('admin config reports a version conflict without claiming a save',async()=>{
+ const cookie='__Host-cvm-session='+'7'.repeat(64);
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:true,recoveryOnly:false});
+  if(url.includes('delivery_rules')){assert.equal(options.method,'PATCH');assert.equal(new URL(url).searchParams.get('version'),'eq.3');return Response.json([]);}
+  throw Error('Unexpected database request');
+ },async()=>{
+  const response=await run('/api/admin/config',{action:'delivery',version:3,shipping:390,threshold:5000},{cookie});
+  assert.equal(response.status,409);assert.equal((await response.json()).error.code,'VERSION_CONFLICT');
+ });
+});
+
 test('wrong current password keeps the website session and never updates the password',async()=>{
  const cookie='__Host-cvm-session='+'e'.repeat(64);let changed=false,deleted=false;
  await mocked(async(url,options)=>{

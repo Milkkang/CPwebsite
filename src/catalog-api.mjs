@@ -37,11 +37,24 @@ async function database(env, path, options = {}) {
     throw new ApiError(503, 'CATALOG_UNAVAILABLE', 'Catalog is temporarily unavailable.');
   }
 }
+async function publicOffers(env) {
+  if (!env.SUPABASE_SECRET_KEY || env.SUPABASE_URL !== 'https://tfrfkvkjmaqnpxdhxumr.supabase.co')
+    throw new ApiError(503, 'CATALOG_UNAVAILABLE', 'Offers are temporarily unavailable.');
+  try {
+    const response=await fetch(env.SUPABASE_URL+'/rest/v1/coupons?select=code,kind,amount,minimum_cents&active=eq.true&order=code.asc',{
+      redirect:'manual',signal:AbortSignal.timeout(8000),headers:{apikey:env.SUPABASE_SECRET_KEY}
+    });
+    if(!response.ok)throw Error('Database request failed');
+    return {offers:await response.json()};
+  }catch{throw new ApiError(503,'CATALOG_UNAVAILABLE','Offers are temporarily unavailable.');}
+}
 export function catalogRoute(pathname) {
   if (pathname === '/api/products') return 'products';
   if (/^\/api\/products\/[^/]+$/.test(pathname)) return 'product-detail';
   if (pathname === '/api/categories') return 'categories';
+  if (pathname === '/api/brands') return 'brands';
   if (pathname === '/api/config') return 'public-config';
+  if (pathname === '/api/offers') return 'offers';
   return null;
 }
 export async function readCatalog(request, env, route) {
@@ -50,7 +63,13 @@ export async function readCatalog(request, env, route) {
   if (route === 'products') return database(env,'rpc/read_catalog', {
     method: 'POST', body: JSON.stringify(catalogParameters(url.searchParams))
   });
+  if (route === 'brands') {
+    for(const key of url.searchParams.keys())if(!['q','category'].includes(key)||url.searchParams.getAll(key).length!==1)fail('Invalid brand filter.');
+    const params=catalogParameters(new URLSearchParams({q:url.searchParams.get('q')??'',category:url.searchParams.get('category')??''}));
+    return {brands:await database(env,'rpc/read_catalog_brands',{method:'POST',body:JSON.stringify({p_query:params.p_query,p_category:params.p_category})})};
+  }
   if (url.search) fail('This endpoint does not accept query parameters.');
+  if (route === 'offers') return publicOffers(env);
   if (route === 'product-detail') {
     let sku;
     try { sku = decodeURIComponent(url.pathname.split('/').at(-1)); } catch { fail('Invalid SKU.'); }

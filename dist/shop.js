@@ -51,7 +51,7 @@ export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="it
 const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
 export function shopFrame(body, query='') {
   const items=Object.values(state.cart).reduce((a,b)=>a+b,0);
-  return '<div class="topline"><span>DESIGN PREVIEW</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
+  return '<div class="topline"><span>CP VALUE MART</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
     '<header class="shop-head"><div class="wrap head-inner">'+logo()+
     '<form class="search" id="search-form">'+icon('search')+'<input name="q" aria-label="Search products" type="search" placeholder="Search products, brands or SKU" value="'+e(query)+'" maxlength="100"><button>Search</button></form>'+
     '<nav class="top-actions" aria-label="Account and shopping"><a class="header-saved" href="#/saved" title="Saved Items" aria-label="Saved Items">'+icon('heart')+'<span aria-hidden="true">Saved Items</span></a><a href="#/account" title="My account" aria-label="My account">'+icon('user')+'</a><a class="bag-link" href="#/cart" aria-label="Basket, '+items+' items">'+icon('bag')+'<span>Basket</span><b>'+items+'</b></a></nav></div>'+
@@ -88,11 +88,12 @@ export function card(p,{quickAdd=false}={}) {
     (variant?add:'<span class="subtle">Sold out</span>')+'</div></div></article>';
 }
 export const grid = (rows,options) => '<div class="product-grid">'+rows.map(product=>card(product,options)).join('')+'</div>';
-export function home() {
-  const published=state.products.filter(p=>p.status==='Published');
+export function home(products=state.products) {
+  const published=products.filter(p=>p.status==='Published');
   const featured=[...published.filter(p=>p.featured),...published.filter(p=>!p.featured)].slice(0,10);
   const config=homepageSettings();
-  const heroProducts=config.heroProductIds.length?config.heroProductIds.map(findProduct).filter(p=>p?.status==='Published').slice(0,3):featured.slice(0,3);
+  const chosenHero=config.heroProductIds.map(id=>products.find(p=>p.id===id)).filter(p=>p?.status==='Published').slice(0,3);
+  const heroProducts=chosenHero.length?chosenHero:featured.slice(0,3);
   const shownCategories=categories.filter(([id])=>config.categoryIds.includes(id));
   const visual=heroProducts.map((p,i)=>'<figure class="hero-tile tile-'+i+'"><img src="'+e(imageUrl(p.image))+'" alt=""></figure>').join('');
   return '<section class="hero"><div class="hero-copy"><p class="overline">'+e(config.eyebrow)+'</p><h1>'+e(config.title).replaceAll('\n','<br>')+'</h1><p class="hero-desc">'+e(config.description)+'</p><div class="button-row">'+go(config.primaryPath,e(config.primaryLabel)+' <span>↗</span>','btn primary')+(config.secondaryLabel?go(config.secondaryPath,e(config.secondaryLabel),'btn outline'):'')+'</div></div><div class="hero-media" aria-hidden="true">'+visual+'</div></section>'+
@@ -116,27 +117,28 @@ function pagination(path,params,paging,total) {
     numbers.map((n,i)=>(i&&n-numbers[i-1]>1?'<span aria-hidden="true">…</span>':'')+(n===page?'<span class="btn primary small" aria-current="page">'+n+'</span>':pageLink(n,String(n)))).join('')+
     (page<pages?pageLink(page+1,'Next →'):'<span class="btn outline small" aria-disabled="true">Next →</span>')+'</div></nav>';
 }
-export function catalog(path,params,id='') {
+export function catalog(path,params,id='',remote) {
   const q=params.get('q')??'', brand=params.get('brand')??'', sort=params.get('sort')??'featured';
-  const all=matching(q).filter(p=>!id||p.category===id);
-  const brands=[...new Set(all.map(p=>p.brand))].sort();
-  const rows=all.filter(p=>!brand||p.brand===brand).sort((a,b)=>
+  const all=remote?remote.products:matching(q).filter(p=>!id||p.category===id);
+  const brands=remote?.brands??[...new Set(all.map(p=>p.brand))].sort();
+  const rows=remote?all:all.filter(p=>!brand||p.brand===brand).sort((a,b)=>
     sort==='price-up'?productPrice(a)-productPrice(b):sort==='price-down'?productPrice(b)-productPrice(a):
     sort==='name'?a.name.localeCompare(b.name):Number(b.featured)-Number(a.featured));
-  const paging=catalogPagination(params,rows.length);
+  const total=remote?remote.pagination.total:rows.length;
+  const paging=remote?{size:remote.pagination.pageSize,pages:remote.pagination.totalPages,page:remote.pagination.page,start:(remote.pagination.page-1)*remote.pagination.pageSize}:catalogPagination(params,rows.length);
   const title=q?'Search results':id?categoryName(id):'All products';
-  return crumb(e(title))+'<div class="page-title"><h1>'+e(title)+'</h1><p>'+rows.length+' product'+(rows.length===1?'':'s')+(q?' for “'+e(q)+'”':'')+'</p></div>'+
+  return crumb(e(title))+'<div class="page-title"><h1>'+e(title)+'</h1><p>'+total+' product'+(total===1?'':'s')+(q?' for “'+e(q)+'”':'')+'</p></div>'+
     '<div class="filters"><label>Category <select id="category-filter"><option value="#/shop">All categories</option>'+
     categories.map(([cat,name])=>'<option value="'+e(href('/category/'+cat,q?{q}:{}))+'"'+selected(cat,id)+'>'+e(name)+'</option>').join('')+'</select></label>'+
     '<form id="catalog-filters" data-path="'+e(path)+'"><input type="hidden" name="q" value="'+e(q)+'"><label>Brand <select name="brand"><option value="">All brands</option>'+
     brands.map(b=>'<option'+selected(b,brand)+'>'+e(b)+'</option>').join('')+'</select></label><label>Sort by <select name="sort">'+
     [['featured','Featured'],['price-up','Price · low to high'],['price-down','Price · high to low'],['name','Name · A to Z']].map(([k,v])=>'<option value="'+k+'"'+selected(k,sort)+'>'+v+'</option>').join('')+'</select></label><label>Products per page <select name="size">'+[30,50,100].map(size=>'<option value="'+size+'"'+selected(size,paging.size)+'>'+size+'</option>').join('')+'</select></label></form></div>'+
-    (rows.length?grid(rows.slice(paging.start,paging.start+paging.size)):empty('No matching products','Try another keyword, or browse all products.',go('/shop','Shop all','btn primary')))+pagination(path,params,paging,rows.length);
+    (rows.length?grid(remote?rows:rows.slice(paging.start,paging.start+paging.size)):empty('No matching products','Try another keyword, or browse all products.',go('/shop','Shop all','btn primary')))+pagination(path,params,paging,total);
 }
-export function detail(p, params) {
+export function detail(p, params, relatedProducts=state.products) {
   if(!p||p.status!=='Published') return missing();
   const v=p.variants.find(v=>v.sku===params.get('sku'))??p.variants[0], available=v.stock>=v.min;
-  const related=state.products.filter(x=>x.id!==p.id&&x.status==='Published'&&x.category===p.category).slice(0,4);
+  const related=relatedProducts.filter(x=>x.id!==p.id&&x.status==='Published'&&x.category===p.category).slice(0,4);
   return crumb(go('/category/'+p.category,e(categoryName(p.category))),e(p.name))+
     '<section class="detail">'+photo(p,'detail-photo',v)+'<div class="detail-copy"><div class="overline">'+e(p.brand)+'</div><h1>'+e(p.name)+'</h1><p class="detail-price">'+cash(v.price)+'</p><p>'+e(p.description)+'</p>'+
     (p.variants.length>1?'<fieldset><legend>Pack size</legend><div class="variant-row">'+p.variants.map(row=>'<span class="variant-choice">'+photo(p,'variant-thumb',row)+link(href('/product/'+p.id,{sku:row.sku}),e(row.name),'btn '+(row.sku===v.sku?'chosen':'outline'))+'</span>').join('')+'</div></fieldset>':'')+

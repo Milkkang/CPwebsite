@@ -55,3 +55,18 @@ test('public config never requests coupons or roles and HEAD has no body', async
   assert.equal(paths.length,3);
   assert.equal(paths.some(p=>p.includes('coupons')||p.includes('admin_roles')),false);
 });
+
+test('brands are filtered through the published facet RPC and active offers expose only coupon terms',async()=>{
+ const paths=[];
+ await withFetch(async(url,options)=>{paths.push([url,options]);return Response.json(url.includes('read_catalog_brands')?['Acme']:[]);},async()=>{
+  const brands=await call('/api/brands?q=soap&category=skin-care');
+  assert.equal(brands.status,200);assert.deepEqual((await brands.json()).brands,['Acme']);
+  assert.equal((await call('/api/brands?status=Draft')).status,400);
+  const offers=await call('/api/offers');assert.equal(offers.status,200);
+  assert.deepEqual((await offers.json()).offers,[]);
+ });
+ assert.equal(JSON.parse(paths[0][1].body).p_query,'soap');
+ assert.equal(paths[0][1].headers.apikey,env.SUPABASE_PUBLISHABLE_KEY);
+ assert.equal(paths[1][1].headers.apikey,env.SUPABASE_SECRET_KEY);
+ assert.equal(paths[1][0].includes('active=eq.true'),true);
+});
