@@ -62,7 +62,7 @@ test('Phase 6 migration persists jobs, retries, suppressions and duplicate event
 
 test('Cloudflare config schedules finite retry processing and declares only secret names',async()=>{
  const config=await readFile(new URL('../cloudflare.config.ts',import.meta.url),'utf8');
- assert.match(config,/triggers\.scheduled\(\{ schedule: '\* \* \* \* \*' \}\)/);
+ assert.match(config,/triggers: isPreview \? \[\] : \[triggers\.scheduled\(\{ schedule: '\* \* \* \* \*' \}\)\]/);
  for(const name of ['RESEND_API_KEY','RESEND_WEBHOOK_SECRET','TRANSACTIONAL_EMAIL_TEST_RECIPIENTS'])assert.match(config,new RegExp(name+': bindings\\.secret\\(\\)'));
  assert.doesNotMatch(config,/re_[A-Za-z0-9]{10}/);
 });

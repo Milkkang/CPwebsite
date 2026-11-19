@@ -31,7 +31,7 @@ Only names and expected purpose are documented; values must remain in protected 
 - `TRANSACTIONAL_EMAIL_TEST_RECIPIENTS`: comma-separated acceptance allowlist; never committed.
 - `TRANSACTIONAL_EMAIL_FROM`: `CP Value Mart <orders@notify.cpvaluemart.com>`.
 - `TRANSACTIONAL_EMAIL_REPLY_TO`: `orders@notify.cpvaluemart.com`.
-- Cron trigger: every minute, to claim due retry jobs.
+- Production Cron trigger: every minute, to claim due retry jobs. Preview omits the trigger because Workers Preview uploads do not support `triggers`.
 
 Before configuration, independently confirm the Resend domain is verified and sending-enabled, the account plan/limits are sufficient, and the production endpoint subscribes to `email.delivered`, `email.bounced`, `email.complained` and `email.failed`.
 
@@ -60,7 +60,7 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 
 - Draft PR: [#18](https://github.com/Milkkang/CPwebsite/pull/18), head `4ec72b3dd867b1f7fc11e9b004b6550e64eb7dc7`; merge SHA pending.
 - GitHub Actions Phase checks run `44528482629` (run 83): success.
-- Cloudflare Preview URL/build: pending.
+- Initial Cloudflare Preview build `4c72e9fd-a7d2-403d-910b-a91c5331d8d0` failed after compiling successfully because Preview uploads reject the `triggers` field. The follow-up makes scheduled triggers production-only; replacement Preview result pending.
 - Supabase migration application: not performed.
 - Resend webhook/configuration: not performed.
 - Production deployment and health: not performed.

@@ -1,13 +1,13 @@
 import { bindings, defineConfig, triggers } from 'cf/config';
 
-export default defineConfig({
+export default defineConfig(({ isPreview }) => ({
   accountId: '70884be24a5775303f80ffdcafc4eb6c',
   worker: {
     name: 'cpwebsite',
     domains: ['cpvaluemart.com', 'www.cpvaluemart.com'],
     workersDev: true,
     previewUrls: true,
-    triggers: [triggers.scheduled({ schedule: '* * * * *' })],
+    triggers: isPreview ? [] : [triggers.scheduled({ schedule: '* * * * *' })],
     entrypoint: './src/worker.mjs',
     compatibilityDate: '2026-11-17',
     env: { ASSETS: bindings.assets(),
@@ -26,4 +26,4 @@ export default defineConfig({
     observability: { enabled: true, redactQueryString: true,
       logs: { enabled: true, invocationLogs: false }, traces: { enabled: false } }
   }
-});
+}));
