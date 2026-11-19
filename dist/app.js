@@ -1,5 +1,5 @@
-import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
-import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,makeOrder,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
+import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
+import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
 import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
@@ -10,11 +10,20 @@ let lastPath='', lastProductView='', toastTimer, receiptTimer;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
+let ordersOwner='',ordersLoading=false;
+function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,date:String(row.createdAt).slice(0,10),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
+ items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty})),
+ totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt};}
+async function loadOrders(){
+ const owner=auth.account?.id;if(!owner||auth.recoveryOnly)return;
+ ordersLoading=true;try{const result=await authRequest('/api/orders');if(auth.account?.id===owner){state.orders=result.orders.map(mapOrder);ordersOwner=owner;}}
+ catch(error){message(error.message);}finally{ordersLoading=false;render();}
+}
 async function loadAdminProducts() {
   if(!auth.isAdmin||adminProductsLoading)return;
   adminProductsLoading=true;adminProductsError='';
   try{
-    const [result,config]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config')]);
+    const [result,config,orderResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders')]);
     state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
     state.settings.homepage=config.homepage?.content??{};
     homepageVersion=config.homepage?.version??0;
@@ -23,6 +32,7 @@ async function loadAdminProducts() {
     deliveryVersion=config.delivery?.version??0;
     state.coupons=config.coupons.map(row=>({code:row.code,type:row.kind,amount:row.amount,min:row.minimum_cents,active:row.active}));
     couponVersions=new Map(config.coupons.map(row=>[row.code,row.version]));
+    state.orders=orderResult.orders.map(mapOrder);
     adminProductsLoaded=true;
   }catch(error){adminProductsError=error.message;adminProductsLoaded=false;}
   finally{adminProductsLoading=false;render();}
@@ -255,7 +265,10 @@ function render({scroll=false}={}) {
         body=detail(product,params,remote.data.related);break;
       }
       case 'cart': body=cart(repurchaseResult);break;
-      case 'checkout': body=checkout();break;
+      case 'checkout': {
+        if(auth.account&&deliveryAddresses()===null)queueMicrotask(loadAddresses);
+        body=checkout(deliveryAddresses());break;
+      }
       case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
       case 'orders': body=orders(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
@@ -342,9 +355,12 @@ document.addEventListener('submit', async event=>{
     case 'account-form':
       error='Use the secure sign-in form.';break;
     case 'checkout-form': {
-      if(!f.name.trim()||!f.address.trim()) {error='Enter a name and sample delivery address.';break;}
-      const result=makeOrder({...f,name:f.name.trim(),address:f.address.trim()});
-      if(result.error) error=result.error; else navigate('/confirmation',{id:result.order.id});
+      const button=event.submitter??form.querySelector('button');if(button)button.disabled=true;
+      const status=form.querySelector('[data-checkout-status]');if(status){status.hidden=false;status.textContent='Creating secure Stripe test checkout…';}
+      try{const result=await authRequest('/api/checkout/session',{addressId:String(f.addressId),coupon:state.coupon||''});
+        if(!result.testMode||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Test checkout could not be verified.');
+        location.assign(result.checkoutUrl);return;
+      }catch(problem){error=problem.message;if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
       break;
     }
     case 'contact-form':
@@ -360,9 +376,11 @@ document.addEventListener('submit', async event=>{
         navigate('/admin/products');message('Product saved.');}
       catch(problem){error=problem.message;}break;
     case 'order-editor': {
-      const shipItem=event.submitter?.name==='ship-item';
-      error=saveFulfilment(form,data,shipItem);
-      if(!error) {render();message(shipItem?'Item shipped.':'Fulfilment saved.');} break;
+      const order=state.orders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
+      if(!order?.backendId){error='Order not found.';break;}
+      try{await authRequest('/api/admin/orders',{orderId:order.backendId,version:order.version,status:shipItem?'Shipped':String(data.get('status')),tracking:String(data.get('tracking')??'').trim()});
+        adminProductsLoaded=false;await loadAdminProducts();message(shipItem?'Item shipped.':'Fulfilment saved.');}
+      catch(problem){error=problem.message;}break;
     }
     case 'coupon-editor':
       try{const code=String(data.get('code')??'').trim().toUpperCase(),kind=String(data.get('type')??''),number=Number(data.get('amount'));
@@ -527,6 +545,6 @@ window.addEventListener('storage',event=>{
     try {Object.assign(state,JSON.parse(event.newValue),{account:null});render();} catch {}
   }
 });
-setAuthListener(()=>{if(auth.account?.id!==shoppingOwner)adminProductsLoaded=false;render();syncShopping();});
+setAuthListener(()=>{if(auth.account?.id!==shoppingOwner)adminProductsLoaded=false;if(auth.account?.id&&auth.account.id!==ordersOwner&&!ordersLoading)loadOrders();render();syncShopping();});
 render();
 refreshSession();

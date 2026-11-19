@@ -1,5 +1,6 @@
 import { authRoute, handleAuth } from './auth-api.mjs';
 import { ApiError, catalogRoute, readCatalog } from './catalog-api.mjs';
+import { commerceRoute, handleCommerce } from './commerce-api.mjs';
 
 function json(body, status, requestId, extra = {}) {
   return new Response(JSON.stringify({ ...body, requestId }), {
@@ -26,12 +27,15 @@ export default {
     const requestId = crypto.randomUUID();
     const start = performance.now();
     let response;
-    const route = authRoute(pathname) ? 'account-api' : catalogRoute(pathname);
+    const route = commerceRoute(pathname) ? 'commerce-api' : authRoute(pathname) ? 'account-api' : catalogRoute(pathname);
     try {
       if (pathname === '/api/health') {
         response = ['GET', 'HEAD'].includes(request.method)
-          ? json({ ok: true, service: 'cpvaluemart-api', phase: 4 }, 200, requestId)
+          ? json({ ok: true, service: 'cpvaluemart-api', phase: 5 }, 200, requestId)
           : json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } }, 405, requestId, { Allow: 'GET, HEAD' });
+      } else if (route === 'commerce-api') {
+        const result=await handleCommerce(request,env);
+        response=json(result.data,result.status,requestId,result.headers);
       } else if (route === 'account-api') {
         const result=await handleAuth(request,env);
         response=json(result.data,result.status,requestId,result.headers);

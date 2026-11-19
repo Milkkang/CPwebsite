@@ -4,7 +4,7 @@ import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
 const nav=[['','Overview'],['revenue','Revenue'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
-  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Orders pending integration</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
+  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Stripe test orders</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
 }
 const heading=(title,subtitle='',actions='')=>'<div class="admin-heading"><div><h1>'+title+'</h1>'+(subtitle?'<p>'+subtitle+'</p>':'')+'</div><div class="button-row">'+actions+'</div></div>';
@@ -71,7 +71,7 @@ function revenuePage(params) {
     '<button class="btn outline">Apply dates</button></form>'+
     (dateError?'<p class="notice" role="status">'+e(dateError)+' Showing the last month.</p>':'')+'</section>'+
     revenueAnalytics(period,orders,filters,metric)+
-    '<p class="subtle revenue-note">Based on simulated orders. Revenue includes delivery fees and subtracts discounts. Cancelled orders are excluded from revenue.</p>'+
+    '<p class="subtle revenue-note">Based on completed Stripe test payments only. Test revenue is not real business revenue. Cancelled orders are excluded.</p>'+
     '<div class="section-title admin-section"><h2>Order History <small class="subtle">('+orders.length+')</small></h2><span class="subtle">'+e(period.from)+(period.from===period.to?'':' to '+e(period.to))+'</span></div>'+
     ordersTable(orders,orderLinks);
 }
@@ -205,7 +205,7 @@ function customersPage() {
     if(o.status!=='Cancelled') c.spend+=o.totals.total;
     customers.set(o.email,c);
   }
-  return heading('Customers',customers.size+' sample shopper profiles from demo orders.')+
+  return heading('Customers',customers.size+' shopper profiles from Stripe test orders.')+
     table(['Customer','Email','Orders','Order value',''],[...customers.values()].map(c=>'<tr><td><b>'+e(c.name)+'</b></td><td>'+e(c.email)+'</td><td>'+c.orders+'</td><td>'+cash(c.spend)+'</td><td>'+link(href('/admin',{q:c.email,range:'1y'}),'View orders ↗','text-link')+'</td></tr>').join('')||'<tr><td colspan="5">No customer orders yet.</td></tr>');
 }
 function salesTables(orders) {
