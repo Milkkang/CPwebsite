@@ -27,6 +27,13 @@ test('member shopping startup discards legacy guest cart instead of merging it',
  assert.match(source,/\^\\\/product\\\//);
 });
 
+test('guests are sent to sign in instead of saving items locally',async()=>{
+ const source=await readFile(new URL('../dist/app.js',import.meta.url),'utf8');
+ const handler=source.match(/else if\('save' in data\) \{[\s\S]*?\n  \}/)?.[0]??'';
+ assert.match(handler,/return navigate\('\/account',\{next:location\.hash\.slice\(1\)\|\|'\/saved'\}\)/);
+ assert.doesNotMatch(handler,/state\.saved\s*=/);
+});
+
 test('checkout uses only a saved address and labels Stripe sandbox clearly',()=>{
  const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
  state.account={id:'test',email:'buyer@example.invalid',name:'Buyer'};
