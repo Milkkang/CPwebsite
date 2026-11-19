@@ -9,7 +9,8 @@
     "preview": "cf previews deploy",
     "deploy": "cf deploy --prebuilt --no-provision --force",
     "data:prepare": "node scripts/migration/prepare.mjs",
-    "test:runtime": "node --test tests/worker-runtime.test.mjs"
+    "test:runtime": "node --test tests/worker-runtime.test.mjs",
+    "test:db": "bash scripts/test-phase6-db.sh"
   },
   "devDependencies": {
     "cf": "1.0.0-rc.1",

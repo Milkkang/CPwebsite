@@ -1,6 +1,6 @@
 # Phase 6 acceptance — Resend transactional email
 
-Status: **implementation in progress; not approved**. Phase 6 must not be treated as released or accepted until the migration, protected configuration, Preview, delivery events, manual checks and production verification below are complete and the user explicitly replies `Approved Phase 6`.
+Status: **merged and deployed to production; live production send remains to be verified**. The user explicitly replied `Approved Phase 6` after Preview and `[TEST ORDER]` manual acceptance. PR #18 is merged. Cloudflare CLI OAuth was completed and the production Worker deployed on 2026-11-20 (Singapore time).
 
 ## Scope
 
@@ -58,7 +58,7 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 
 ## Release evidence to complete
 
-- Draft PR: [#18](https://github.com/Milkkang/CPwebsite/pull/18); initial implementation head `4ec72b3dd867b1f7fc11e9b004b6550e64eb7dc7`; merge SHA pending.
+- PR: [#18](https://github.com/Milkkang/CPwebsite/pull/18); accepted head `85cf4f7b5c6b74d4bee40c017d66cff99464e9f6`; merge SHA `343f43a` (`Merge pull request #18 from Milkkang/feature/phase-6-email-jobs`).
 - GitHub Actions Phase checks run `44528482629` (run 83): success.
 - Preview-fix code head `c068f8baa17f0ba8e907016b3aa75fc7eca05494`; GitHub Actions Phase checks run `44543021894` (run 85): success.
 - Initial Cloudflare Preview build `4c72e9fd-a7d2-403d-910b-a91c5331d8d0` failed after compiling successfully because Preview uploads reject the `triggers` field. Scheduled triggers are now production-only.
@@ -66,8 +66,12 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 - Preview URL: <https://feature-phase-6-email-jobs-cpwebsite.milkkang93.workers.dev>. Homepage and `/api/health` returned HTTP 200; health reported `phase: 6`.
 - Supabase migration `20261119140000_phase6_transactional_email.sql`: applied through the production Supabase SQL Editor; four tables and six service-only RPCs verified, with RLS enabled on all four tables.
 - Resend configuration: verified sending domains, configured the protected Preview bindings, and enabled the Preview webhook for delivered/bounced/complained/failed events. Secret values are not recorded here.
-- Production deployment and health: not performed.
-- Manual acceptance: the protected acceptance recipient received one `[TEST ORDER]` message from the Preview admin resend flow. Delivery-event replay, retry-failure exercise, shipment transition, complaint suppression and bounced-job override remain pending.
+- Production configuration: restricted Resend sending key, production webhook signing secret, and the single approved acceptance recipient are present as protected Worker secrets. The verified `notify.cpvaluemart.com` domain is used by the configured From and Reply-To addresses. Secret values are not recorded here.
+- Production Resend webhook: `https://cpvaluemart.com/api/resend/webhook`, enabled for `email.delivered`, `email.bounced`, `email.complained` and `email.failed`. The earlier Preview webhook remains enabled and points to the Preview URL.
+- Production deployment and health: `npm run deploy` completed with Worker version `e0b28acf-0ecc-40d4-ada9-638645af2900`, both custom domains, and the `* * * * *` schedule. `/api/health` returned HTTP 200 with `phase: 6`; an unsigned POST to `/api/resend/webhook` returned HTTP 400 `INVALID_SIGNATURE`.
+- Database audit after deployment: two email jobs and two attempts existed. One Preview acceptance confirmation job was `delivered` with a recorded delivery event; the other was a deliberately failed Preview retry fixture. No production-originated send or signed production webhook delivery has yet been observed.
+- Automated verification was repeated after deployment: 45 tests and 2 real Worker runtime tests passed.
+- Manual acceptance: the protected acceptance recipient received one `[TEST ORDER]` message from the Preview admin resend flow, and the user approved Phase 6. Delivery-event replay, retry-failure exercise, shipment transition, complaint suppression and bounced-job override remain represented by automated coverage but were not independently exercised against production.
 
 ## Rollback
 
