@@ -135,6 +135,7 @@ create or replace function public.apply_test_payment_event(p_event text,p_type t
 returns jsonb language plpgsql security definer set search_path=public as $$
 declare o public.orders; outcome text; job uuid;
 begin
+ perform pg_advisory_xact_lock(hashtextextended('stripe:'||p_event,0));
  if exists(select 1 from public.stripe_webhook_events where event_id=p_event) then return jsonb_build_object('duplicate',true); end if;
  if p_livemode then raise exception using errcode='P0001',message='LIVE_MODE_REJECTED'; end if;
  select * into o from public.orders where id=p_order for update;

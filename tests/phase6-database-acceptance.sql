@@ -5,6 +5,22 @@ begin
  return new;
 end $$;
 
+do $$
+begin
+ if has_function_privilege('anon','public.reconcile_email_confirmations(integer)','EXECUTE') or
+    has_function_privilege('authenticated','public.reconcile_email_confirmations(integer)','EXECUTE') or
+    has_function_privilege('anon','public.reconcile_email_delivery_events(uuid)','EXECUTE') then
+  raise exception 'new service functions are callable by clients';
+ end if;
+ if not has_function_privilege('service_role','public.reconcile_email_confirmations(integer)','EXECUTE') then
+  raise exception 'service role cannot reconcile outbox';
+ end if;
+ if has_table_privilege('anon','public.email_confirmation_outbox','SELECT') or
+    not (select relrowsecurity from pg_class where oid='public.email_confirmation_outbox'::regclass) then
+  raise exception 'outbox is visible to clients';
+ end if;
+end $$;
+
 create trigger phase6_test_reject_enqueue before insert on public.email_jobs
 for each row execute function public.phase6_test_reject_enqueue();
 
