@@ -86,6 +86,8 @@ See `docs/phase-3-acceptance.md` for configuration, tests and remaining real-mai
 
 Authenticated carts, saved items and recently viewed products are shared through the same-domain API. Admin product, homepage, delivery and coupon writes use server-verified roles and optimistic versions. See `docs/phase-4-acceptance.md`.
 
-## Phase 5 Stripe test checkout (in development)
+## Phase 5 Stripe test checkout
 
 Checkout remains test-only. The Worker accepts only a `sk_test_` runtime key, recalculates orders from the member cart and saved address, and redirects to a Stripe-hosted test Checkout Session. A signed, idempotent webhook commits stock and payment state; browser totals and success redirects never mark an order paid. Stripe secrets belong only in Cloudflare Runtime Secrets. No live key, real card or real revenue is supported.
+
+Phase 5 is approved. Guest baskets are disabled, authenticated basket state is loaded from the database without replaying browser quantities, and the production sandbox payment, cart clearing and single inventory movement were verified. See `docs/phase-5-acceptance.md`.
