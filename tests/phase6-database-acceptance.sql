@@ -5,6 +5,7 @@ begin
  return new;
 end $$;
 
+
 do $$
 begin
  if has_function_privilege('anon','public.reconcile_email_confirmations(integer)','EXECUTE') or
@@ -127,4 +128,23 @@ begin
     (select count(*) from public.email_job_attempts where job_id=retry_job)<>4 then
   raise exception 'retry did not stop after four attempts';
  end if;
+end $$;
+
+do $$
+declare test_order uuid; delivery_job uuid; claimed jsonb;
+begin
+ select order_id into test_order from public.email_confirmation_outbox where event_id='evt_phase6_1';
+ delivery_job:=public.enqueue_order_email(test_order,'cancellation','acceptance/event-order');
+ claimed:=public.claim_email_jobs(10);
+ if not exists(select 1 from jsonb_array_elements(claimed) item where item->>'id'=delivery_job::text) then
+  raise exception 'delivery order job not claimed';
+ end if;
+ perform public.finish_email_attempt(delivery_job,1,true,'synthetic-message-2','',false);
+ perform public.apply_email_delivery_event('event_failed_2','synthetic-message-2','email.failed');
+ if (select status from public.email_jobs where id=delivery_job)<>'failed' then raise exception 'failed event ignored'; end if;
+ perform public.apply_email_delivery_event('event_delivered_2','synthetic-message-2','email.delivered');
+ if (select status from public.email_jobs where id=delivery_job)<>'delivered' then raise exception 'delivery did not supersede failure'; end if;
+ perform public.apply_email_delivery_event('event_bounced_2','synthetic-message-2','email.bounced');
+ perform public.apply_email_delivery_event('event_delivered_late_2','synthetic-message-2','email.delivered');
+ if (select status from public.email_jobs where id=delivery_job)<>'bounced' then raise exception 'late delivery overrode bounce'; end if;
 end $$;
