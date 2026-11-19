@@ -79,7 +79,8 @@ const categoriesGrid = (rows=categories) => '<div class="cat-grid">'+rows.map(([
 export function card(p,{quickAdd=false}={}) {
   const saved=state.saved.includes(p.id), variant=p.variants.find(v=>v.stock>=v.min), single=p.variants.length===1;
   const direct=(quickAdd||single)&&variant;
-  const add=direct?'<button type="button" class="add-btn" data-quick-add="'+e(variant.sku)+'" aria-label="Add '+e(p.name)+' ('+e(variant.name)+') to basket">+</button>':
+  const add=direct&&!state.account?'<a class="add-btn" href="'+e(href('/account',{next:'/product/'+p.id}))+'" aria-label="Sign in to add '+e(p.name)+' to basket">↗</a>':
+    direct?'<button type="button" class="add-btn" data-quick-add="'+e(variant.sku)+'" aria-label="Add '+e(p.name)+' ('+e(variant.name)+') to basket">+</button>':
     go('/product/'+p.id,'<span aria-hidden="true">+</span><span class="sr-only">Choose options for '+e(p.name)+'</span>','add-btn');
   return '<article class="product-card">'+photo(p,'card-photo')+
     '<button class="save-btn '+(saved?'saved':'')+'" data-save="'+e(p.id)+'" aria-pressed="'+saved+'" aria-label="Save '+e(p.name)+'">'+icon('heart')+'</button>'+
@@ -143,7 +144,8 @@ export function detail(p, params, relatedProducts=state.products) {
     '<section class="detail">'+photo(p,'detail-photo',v)+'<div class="detail-copy"><div class="overline">'+e(p.brand)+'</div><h1>'+e(p.name)+'</h1><p class="detail-price">'+cash(v.price)+'</p><p>'+e(p.description)+'</p>'+
     (p.variants.length>1?'<fieldset><legend>Pack size</legend><div class="variant-row">'+p.variants.map(row=>'<span class="variant-choice">'+photo(p,'variant-thumb',row)+link(href('/product/'+p.id,{sku:row.sku}),e(row.name),'btn '+(row.sku===v.sku?'chosen':'outline'))+'</span>').join('')+'</div></fieldset>':'')+
     '<p class="stock-note">'+(available?v.stock+' in stock · Minimum '+v.min:'Currently unavailable')+' <span>SKU '+e(v.sku)+'</span></p>'+
-    '<form id="add-to-cart" data-sku="'+e(v.sku)+'" class="button-row"><label class="qty-label">Qty <input aria-label="Quantity" name="qty" type="number" min="'+v.min+'" max="'+v.stock+'" value="'+v.min+'" required '+(available?'':'disabled')+'></label><button class="btn primary" '+(available?'':'disabled')+'>Add to basket</button><button type="button" class="btn outline" data-save="'+e(p.id)+'" aria-pressed="'+state.saved.includes(p.id)+'">'+icon('heart')+' '+(state.saved.includes(p.id)?'Saved':'Save')+'</button></form>'+
+    (!state.account?'<div class="button-row">'+link(href('/account',{next:'/product/'+p.id+'?sku='+encodeURIComponent(v.sku)}),'Sign in to add to basket','btn primary')+'<button type="button" class="btn outline" data-save="'+e(p.id)+'" aria-pressed="'+state.saved.includes(p.id)+'">'+icon('heart')+' '+(state.saved.includes(p.id)?'Saved':'Save')+'</button></div>':
+    '<form id="add-to-cart" data-sku="'+e(v.sku)+'" class="button-row"><label class="qty-label">Qty <input aria-label="Quantity" name="qty" type="number" min="'+v.min+'" max="'+v.stock+'" value="'+v.min+'" required '+(available?'':'disabled')+'></label><button class="btn primary" '+(available?'':'disabled')+'>Add to basket</button><button type="button" class="btn outline" data-save="'+e(p.id)+'" aria-pressed="'+state.saved.includes(p.id)+'">'+icon('heart')+' '+(state.saved.includes(p.id)?'Saved':'Save')+'</button></form>')+
     '<div class="detail-delivery">'+icon('truck')+' '+go('/delivery','Singapore delivery · Details')+'</div></div></section>'+
     (related.length?'<section class="section"><div class="section-title"><h2>More in '+e(categoryName(p.category))+'</h2></div>'+grid(related)+'</section>':'');
 }
@@ -161,6 +163,7 @@ function repurchaseNotice(result) {
     '</strong><ul>'+result.skipped.map(item=>'<li>'+e(item.name)+(item.option?' · '+e(item.option):'')+' — '+e(item.error)+'</li>').join('')+'</ul></div>';
 }
 export function cart(repurchase) {
+  if(!state.account)return crumb('Basket')+accountSignIn('/cart');
   const rows=cartLines(), amounts=totals();
   return crumb(go('/account','My Account'),'Basket')+'<div class="page-title"><h1>Your basket</h1></div>'+repurchaseNotice(repurchase)+(!rows.length?empty('Your basket is empty','Browse the shop to add something.',go('/shop','Continue shopping','btn primary')):
     '<div class="two-col"><section class="panel">'+rows.map(({sku,qty,product,variant})=>'<article class="cart-line">'+
