@@ -37,7 +37,7 @@ Before configuration, independently confirm the Resend domain is verified and se
 
 ## Current automated verification
 
-- `npm test`: 44 tests passed.
+- `npm test`: 45 tests passed.
 - `npm run build`: passed; generated Worker configuration contains the one-minute scheduled trigger and secret bindings by name only.
 - `npm run test:runtime`: 2 real Worker runtime tests passed.
 - `git diff --check`: passed.
@@ -64,10 +64,10 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 - Initial Cloudflare Preview build `4c72e9fd-a7d2-403d-910b-a91c5331d8d0` failed after compiling successfully because Preview uploads reject the `triggers` field. Scheduled triggers are now production-only.
 - Replacement Cloudflare Preview build `af8f74c0-9018-46dd-8d65-0236720ff283`, version `004144b9`, status `Ready`.
 - Preview URL: <https://feature-phase-6-email-jobs-cpwebsite.milkkang93.workers.dev>. Homepage and `/api/health` returned HTTP 200; health reported `phase: 6`.
-- Supabase migration application: not performed.
-- Resend webhook/configuration: not performed.
+- Supabase migration `20261119140000_phase6_transactional_email.sql`: applied through the production Supabase SQL Editor; four tables and six service-only RPCs verified, with RLS enabled on all four tables.
+- Resend configuration: verified sending domains, configured the protected Preview bindings, and enabled the Preview webhook for delivered/bounced/complained/failed events. Secret values are not recorded here.
 - Production deployment and health: not performed.
-- Manual acceptance: not performed.
+- Manual acceptance: the protected acceptance recipient received one `[TEST ORDER]` message from the Preview admin resend flow. Delivery-event replay, retry-failure exercise, shipment transition, complaint suppression and bounced-job override remain pending.
 
 ## Rollback
 

@@ -19,7 +19,7 @@
 | Phase 3 | 已批准 | 注册、验证、登录、资料、地址、密码和管理员权限已完成。 |
 | Phase 4 | 已批准（1 项延后） | 共享数据与会员购物完成；断网保存人工检查按用户要求延至 Phase 8。 |
 | Phase 5 | 已批准 | Stripe sandbox 测试结账、订单、webhook、库存和购物车回写已完成。 |
-| Phase 6 | 未开始 | 交易邮件、队列、重试、送达事件与后台补发。 |
+| Phase 6 | 实施中，待批准 | Resend 交易邮件、队列、重试、送达事件与后台补发已实现；Preview 已配置并完成一次测试邮件人工验收，完整验收与生产发布仍待完成。 |
 | Phase 7 | 未开始 | 后台履约、追踪、取消、测试退款和回库。 |
 | Phase 8 | 未开始 | 全链路验收、恢复演练和运维交付。 |
 
@@ -42,6 +42,14 @@
 - 访客点击 Saved Item／心形按钮会进入登录页，不再把收藏写入本地浏览器。
 - 登录用户继续通过 `/api/shopping` 保存或取消收藏。
 
+### Phase 6 Resend 交易邮件
+
+- PR：[#18 Add Phase 6 Resend transactional email jobs](https://github.com/Milkkang/CPwebsite/pull/18)，当前 head 由 GitHub Actions run 87 验证通过。
+- Supabase Phase 6 加法 migration 已应用；邮件任务、尝试、送达事件、退信/投诉 suppression 均启用 RLS，敏感 RPC 仅授予 `service_role`。
+- Resend 两个发送域名已验证；Preview 受保护配置和 webhook 已完成，验收邮箱收到一封 `[TEST ORDER]` 邮件。
+- Preview Origin 安全检查已修复，只允许正式域名和项目专属 `workers.dev` Preview 域名；其他项目 Preview 仍拒绝。
+- 尚未合并 PR、部署生产或进入 Phase 7。剩余验收：delivery webhook/replay、有限重试、发货通知幂等、投诉抑制和 bounced 明确补发。
+
 ### Cloudflare Workers Preview 修复
 
 - 项目使用 `cloudflare.config.ts` 和 `cf@1.0.0-rc.1`，不是 Wrangler 配置项目。
@@ -59,12 +67,12 @@
 
 ## 当前验证结果
 
-- `npm test`：38 项通过。
+- `npm test`：45 项通过（Phase 6 分支）。
 - `npm run build`：通过。
 - `npm run test:runtime`：2 项通过。
 - `git diff --check`：通过。
 - GitHub Phase checks、Cloudflare Preview 和主分支生产构建均通过。
-- 生产 `/api/health` 返回 HTTP 200，应用阶段为 Phase 5。
+- Preview `/api/health` 返回 HTTP 200，应用阶段为 Phase 6；生产仍为 Phase 5。
 
 ## 安全边界
 
@@ -78,13 +86,13 @@
 ## 遗留事项
 
 1. Phase 4 后台断网保存与恢复重试未人工执行；用户要求延至 Phase 8，不能标记为通过。
-2. Phase 5 只有测试支付；交易邮件属于 Phase 6，尚未开始。
+2. Phase 5 只有测试支付；Phase 6 已实施但尚未完成全部人工验收或生产发布。
 3. 后台履约、追踪、取消和测试退款属于 Phase 7。
 4. 测试订单必须持续与未来真实订单及营收统计隔离。
 
 ## 下一步
 
-下一位开发者应先阅读 `docs/github-development-workflow.md`，从最新 `origin/main` 建立独立分支或工作树，然后开始 Phase 6 设计。Phase 6 至少包括邮件任务持久化、幂等键、有限重试、送达/退信/投诉 webhook、管理员补发和测试收件人限制。未获得明确的 `Approved Phase 6` 前不得进入 Phase 7。
+下一位开发者应先阅读 `docs/github-development-workflow.md`，从最新 `origin/main` 建立独立分支或工作树，继续完成 Phase 6 剩余人工验收。未获得明确的 `Approved Phase 6` 前不得进入 Phase 7。
 
 ## 回滚参考
 
