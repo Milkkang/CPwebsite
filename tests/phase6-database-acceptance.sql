@@ -148,3 +148,19 @@ begin
  perform public.apply_email_delivery_event('event_delivered_late_2','synthetic-message-2','email.delivered');
  if (select status from public.email_jobs where id=delivery_job)<>'bounced' then raise exception 'late delivery overrode bounce'; end if;
 end $$;
+
+do $$
+declare test_order uuid; admin_id uuid; initial_version integer;
+begin
+ select o.id,o.user_id,o.version into test_order,admin_id,initial_version
+ from public.orders o join public.email_confirmation_outbox x on x.order_id=o.id
+ where x.event_id='evt_phase6_1';
+ perform public.admin_update_order(admin_id,test_order,initial_version,'Shipped','TRACK-TEST-1');
+ if (select count(*) from public.email_jobs where order_id=test_order and kind='shipment')<>1 then
+  raise exception 'first shipped transition did not enqueue exactly once';
+ end if;
+ perform public.admin_update_order(admin_id,test_order,initial_version+1,'Shipped','TRACK-TEST-1');
+ if (select count(*) from public.email_jobs where order_id=test_order and kind='shipment')<>1 then
+  raise exception 'repeated shipped save enqueued another email';
+ end if;
+end $$;
