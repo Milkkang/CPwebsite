@@ -60,6 +60,10 @@ export function profilePanel(){return '<section class="panel"><h2>Account detail
 export function passwordPanel(){return '<section class="panel"><h2>Change password</h2><p>After saving, sign in again with your new password.</p><form id="auth-password" class="form-stack">'+input('Current password','currentPassword','password','autocomplete="current-password" maxlength="128"')+input('New password','password','password','autocomplete="new-password" minlength="12" maxlength="128"')+input('Confirm new password','confirmPassword','password','autocomplete="new-password" minlength="12" maxlength="128"')+'<button class="btn primary">Save password</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
 let addresses=null,addressError='',addressOwner='';
 export async function loadAddresses(){try{addresses=(await authRequest('/api/addresses')).addresses;addressError='';addressOwner=auth.account?.id;}catch(error){addresses=[];addressError=error.message;}onAuthChange();}
+export function deliveryAddresses(){
+ if(addressOwner!==auth.account?.id)return null;
+ return addresses;
+}
 export function addressesPanel(){
  if(addressOwner!==auth.account?.id){addresses=null;addressOwner=auth.account?.id;}
  if(addresses===null){addresses=[];queueMicrotask(loadAddresses);}

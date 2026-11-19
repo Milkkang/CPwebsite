@@ -1,6 +1,6 @@
 import { ApiError } from './catalog-api.mjs';
 const COOKIE='__Host-cvm-session';
-const ORIGINS=new Set(['https://cpvaluemart.com','https://www.cpvaluemart.com']);
+export const ORIGINS=new Set(['https://cpvaluemart.com','https://www.cpvaluemart.com']);
 const encoder=new TextEncoder();
 export const authRoute=path=>path.startsWith('/api/auth/')||path==='/api/profile'||path==='/api/addresses'||path.startsWith('/api/addresses/')||path==='/api/shopping'||path==='/api/admin'||path.startsWith('/api/admin/');
 const bad=(message='Check the form and try again.')=>{throw new ApiError(400,'INVALID_INPUT',message);};
@@ -31,8 +31,8 @@ async function upstream(env,path,{method='GET',body,token,service=false,allowFai
  if(!response.ok&&!allowFailure)throw new ApiError(503,'AUTH_UNAVAILABLE','Account service is temporarily unavailable.');
  return {ok:response.ok,status:response.status,data};
 }
-const db=(env,path,options={})=>upstream(env,'/rest/v1/'+path,{...options,service:true});
-async function bodyJSON(request) {
+export const db=(env,path,options={})=>upstream(env,'/rest/v1/'+path,{...options,service:true});
+export async function bodyJSON(request) {
  if(!(request.headers.get('Content-Type')??'').startsWith('application/json'))bad();
  const reader=request.body?.getReader();if(!reader)bad();let length=0,chunks=[];
  while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>8192){await reader.cancel();throw new ApiError(413,'REQUEST_TOO_LARGE','Form is too large.');}chunks.push(value);}
@@ -47,7 +47,7 @@ async function limit(request,env,scope,identity='') {
  const r=await db(env,'rpc/consume_auth_limit',{method:'POST',body:{p_key:key,p_limit:scope==='login'?20:5,p_seconds:900}});
  if(r.data!==true)throw new ApiError(429,'TOO_MANY_ATTEMPTS','Too many attempts. Please try again in 15 minutes.');
 }
-async function identity(request,env,{required=true,allowRecovery=false}={}) {
+export async function identity(request,env,{required=true,allowRecovery=false}={}) {
  const raw=cookieHashRequest(request);const sessionHash=raw?await hash(raw):null;
  const r=sessionHash?await db(env,'rpc/resolve_web_session',{method:'POST',body:{p_hash:sessionHash}}):{data:null};
  if(!r.data?.account){if(required)throw new ApiError(401,'SIGN_IN_REQUIRED','Please sign in again.');return null;}

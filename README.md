@@ -69,7 +69,7 @@ checks production constraints/RLS inside a rolled-back transaction. The browser
 export and read-only difference tool are in `scripts/migration/`. See
 `docs/phase-2-acceptance.md` for import boundaries, acceptance and recovery.
 
-## Phase 3 accounts (acceptance in progress)
+## Phase 3 accounts
 
 Email/password accounts are handled by Supabase Auth through the same-domain API.
 Runtime `SUPABASE_SECRET_KEY` is required; never add it to Builds or the browser.
@@ -81,3 +81,11 @@ administrator access are checked on the server. TokenHash callbacks are served a
 Old browser-local identities are ignored. Shared product editing remains Phase 4;
 the simulated order submission is disabled until the real test checkout is ready.
 See `docs/phase-3-acceptance.md` for configuration, tests and remaining real-mail checks.
+
+## Phase 4 shared storefront
+
+Authenticated carts, saved items and recently viewed products are shared through the same-domain API. Admin product, homepage, delivery and coupon writes use server-verified roles and optimistic versions. See `docs/phase-4-acceptance.md`.
+
+## Phase 5 Stripe test checkout (in development)
+
+Checkout remains test-only. The Worker accepts only a `sk_test_` runtime key, recalculates orders from the member cart and saved address, and redirects to a Stripe-hosted test Checkout Session. A signed, idempotent webhook commits stock and payment state; browser totals and success redirects never mark an order paid. Stripe secrets belong only in Cloudflare Runtime Secrets. No live key, real card or real revenue is supported.

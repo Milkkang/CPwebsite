@@ -12,7 +12,9 @@ export default defineConfig({
     env: { ASSETS: bindings.assets(),
       SUPABASE_URL: bindings.text('https://tfrfkvkjmaqnpxdhxumr.supabase.co'),
       SUPABASE_PUBLISHABLE_KEY: bindings.secret(),
-      SUPABASE_SECRET_KEY: bindings.secret()
+      SUPABASE_SECRET_KEY: bindings.secret(),
+      STRIPE_SECRET_KEY: bindings.secret(),
+      STRIPE_WEBHOOK_SECRET: bindings.secret()
     },
     assets: { runWorkerFirst: ['/api', '/api/*', '/auth/confirm', '/auth/reset'], notFoundHandling: '404-page' },
     observability: { enabled: true, redactQueryString: true,
