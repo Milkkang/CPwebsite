@@ -6,6 +6,7 @@
     "test": "node scripts/check-syntax.mjs && node --test tests/worker.test.mjs tests/catalog-api.test.mjs tests/catalog-client.test.mjs tests/import.test.mjs tests/auth-api.test.mjs tests/auth-ui.test.mjs tests/commerce-api.test.mjs tests/checkout-ui.test.mjs && node tests/product-editing.mjs",
     "build": "cf build && node scripts/check-build.mjs",
     "dev": "cf dev",
+    "preview": "cf previews deploy",
     "deploy": "cf deploy --prebuilt --no-provision --force",
     "data:prepare": "node scripts/migration/prepare.mjs",
     "test:runtime": "node --test tests/worker-runtime.test.mjs"
