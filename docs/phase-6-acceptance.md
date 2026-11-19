@@ -1,6 +1,6 @@
 # Phase 6 acceptance — Resend transactional email
 
-Status: **merged and deployed to production; live production send remains to be verified**. The user explicitly replied `Approved Phase 6` after Preview and `[TEST ORDER]` manual acceptance. PR #18 is merged. Cloudflare CLI OAuth was completed and the production Worker deployed on 2026-11-20 (Singapore time).
+Status: **merged and deployed to production; recovery hotfix and live production send remain to be verified**. The user explicitly replied `Approved Phase 6` after Preview and `[TEST ORDER]` manual acceptance. PR #18 is merged. Cloudflare CLI OAuth was completed and the production Worker deployed on 2026-11-20 (Singapore time).
 
 ## Scope
 
@@ -71,6 +71,7 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 - Production deployment and health: `npm run deploy` completed with Worker version `e0b28acf-0ecc-40d4-ada9-638645af2900`, both custom domains, and the `* * * * *` schedule. `/api/health` returned HTTP 200 with `phase: 6`; an unsigned POST to `/api/resend/webhook` returned HTTP 400 `INVALID_SIGNATURE`.
 - Database audit after deployment: two email jobs and two attempts existed. One Preview acceptance confirmation job was `delivered` with a recorded delivery event; the other was a deliberately failed Preview retry fixture. No production-originated send or signed production webhook delivery has yet been observed.
 - Automated verification was repeated after deployment: 45 tests and 2 real Worker runtime tests passed.
+- Recovery follow-up: [PR #19](https://github.com/Milkkang/CPwebsite/pull/19) is a draft with an additive migration for paid-order email outbox recovery, expired fourth-attempt leases, early and out-of-order delivery events, duplicate admin resend, and concurrent Stripe replay. Its isolated PostgreSQL acceptance applies every repository migration and uses synthetic orders, fault injection and parallel payment callbacks. The repair migration is not applied to production and the repair Worker is not deployed; production remains on version `e0b28acf-0ecc-40d4-ada9-638645af2900`.
 - Manual acceptance: the protected acceptance recipient received one `[TEST ORDER]` message from the Preview admin resend flow, and the user approved Phase 6. Delivery-event replay, retry-failure exercise, shipment transition, complaint suppression and bounced-job override remain represented by automated coverage but were not independently exercised against production.
 
 ## Rollback
