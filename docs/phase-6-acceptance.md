@@ -58,9 +58,12 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 
 ## Release evidence to complete
 
-- Draft PR: [#18](https://github.com/Milkkang/CPwebsite/pull/18), head `4ec72b3dd867b1f7fc11e9b004b6550e64eb7dc7`; merge SHA pending.
+- Draft PR: [#18](https://github.com/Milkkang/CPwebsite/pull/18); initial implementation head `4ec72b3dd867b1f7fc11e9b004b6550e64eb7dc7`; merge SHA pending.
 - GitHub Actions Phase checks run `44528482629` (run 83): success.
-- Initial Cloudflare Preview build `4c72e9fd-a7d2-403d-910b-a91c5331d8d0` failed after compiling successfully because Preview uploads reject the `triggers` field. The follow-up makes scheduled triggers production-only; replacement Preview result pending.
+- Preview-fix code head `c068f8baa17f0ba8e907016b3aa75fc7eca05494`; GitHub Actions Phase checks run `44543021894` (run 85): success.
+- Initial Cloudflare Preview build `4c72e9fd-a7d2-403d-910b-a91c5331d8d0` failed after compiling successfully because Preview uploads reject the `triggers` field. Scheduled triggers are now production-only.
+- Replacement Cloudflare Preview build `af8f74c0-9018-46dd-8d65-0236720ff283`, version `004144b9`, status `Ready`.
+- Preview URL: <https://feature-phase-6-email-jobs-cpwebsite.milkkang93.workers.dev>. Homepage and `/api/health` returned HTTP 200; health reported `phase: 6`.
 - Supabase migration application: not performed.
 - Resend webhook/configuration: not performed.
 - Production deployment and health: not performed.
