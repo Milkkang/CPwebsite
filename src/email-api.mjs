@@ -1,5 +1,5 @@
 import { ApiError } from './catalog-api.mjs';
-import { ORIGINS, bodyJSON, db, identity } from './auth-api.mjs';
+import { isAllowedOrigin, bodyJSON, db, identity } from './auth-api.mjs';
 
 const encoder=new TextEncoder();
 const safeId=value=>typeof value==='string'&&/^[a-f0-9-]{36}$/.test(value);
@@ -79,7 +79,7 @@ async function admin(request,env){
   const rows=await db(env,'rpc/read_admin_email_jobs',{method:'POST',body:{p_actor:who.account.id}});return {status:200,data:{jobs:rows.data}};
  }
  if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
- const origin=request.headers.get('Origin');if(!ORIGINS.has(origin)||origin!==new URL(request.url).origin)throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
+ if(!isAllowedOrigin(request))throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
  const data=await bodyJSON(request);if(data.action!=='resend'||!safeId(data.jobId))throw new ApiError(400,'INVALID_INPUT','Choose an eligible failed email.');
  const result=await db(env,'rpc/admin_resend_email',{method:'POST',body:{p_actor:who.account.id,p_job:data.jobId},allowFailure:true});
  if(!result.ok||!safeId(result.data))throw new ApiError(409,'RESEND_NOT_ALLOWED','This email cannot be resent.');
