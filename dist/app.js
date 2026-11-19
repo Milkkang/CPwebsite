@@ -433,7 +433,7 @@ document.addEventListener('click', async event=>{
   else if('save' in data) {
     const saved=state.saved.includes(data.save);
     if(auth.account&&!auth.recoveryOnly){try{await authRequest('/api/shopping',{action:saved?'unsave':'save',sku:data.save});await loadMemberShopping();}catch(error){return message(error.message);}}
-    else{state.saved=saved?state.saved.filter(id=>id!==data.save):[...state.saved,data.save];save();}render();
+    else{return navigate('/account',{next:location.hash.slice(1)||'/saved'});}render();
     [...document.querySelectorAll('[data-save]')].find(b=>b.dataset.save===data.save)?.focus({preventScroll:true});
     message(saved?'Removed from saved items.':'Added to saved items.');
   } else if('quickAdd' in data) {
