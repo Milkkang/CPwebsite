@@ -36,7 +36,7 @@ async function loadAdminProducts() {
   if(!auth.isAdmin||adminProductsLoading)return;
   adminProductsLoading=true;adminProductsError='';
   try{
-    const [result,config,orderResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders')]);
+    const [result,config,orderResult,emailResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs')]);
     state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
     state.settings.homepage=config.homepage?.content??{};
     homepageVersion=config.homepage?.version??0;
@@ -45,7 +45,7 @@ async function loadAdminProducts() {
     deliveryVersion=config.delivery?.version??0;
     state.coupons=config.coupons.map(row=>({code:row.code,type:row.kind,amount:row.amount,min:row.minimum_cents,active:row.active}));
     couponVersions=new Map(config.coupons.map(row=>[row.code,row.version]));
-    state.orders=orderResult.orders.map(mapOrder);
+    state.orders=orderResult.orders.map(row=>({...mapOrder(row),emailJobs:emailResult.jobs.filter(job=>job.orderId===row.id)}));
     adminProductsLoaded=true;
   }catch(error){adminProductsError=error.message;adminProductsLoaded=false;}
   finally{adminProductsLoading=false;render();}
@@ -462,6 +462,11 @@ document.addEventListener('click', async event=>{
     try{await setShoppingCart(sku,qty);render();}catch(error){message(error.message);}
   } else if('remove' in data) {try{await setShoppingCart(data.remove,0);render();}catch(error){message(error.message);}}
   else if('signOut' in data) {try{await signOut();navigate('/account');message('Signed out.');}catch(error){message(error.message);}}
+  else if('resendEmail' in data) {
+    if(button.disabled)return;button.disabled=true;
+    try{await authRequest('/api/admin/email-jobs',{action:'resend',jobId:data.resendEmail});adminProductsLoaded=false;await loadAdminProducts();message('Email queued for another test delivery.');}
+    catch(error){button.disabled=false;message(error.message);}return;
+  }
   else if('receiveOrder' in data) {
     const error=confirmBuyerReceipt(data.receiveOrder);
     if(error) message(error);

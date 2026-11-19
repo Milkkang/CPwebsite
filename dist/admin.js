@@ -186,12 +186,16 @@ function orderEditor(id,params) {
   const {origin,...filters}=Object.fromEntries(params);
   const back=href(origin==='revenue'?'/admin/revenue':'/admin',filters);
   if(!o) return empty('Order not found','Return to the order list.',link(back,'View orders','btn primary'));
+  const emailJobs=o.emailJobs??[];
+  const emailPanel='<section class="panel"><h2>Transactional email</h2><p class="subtle">Test recipients are restricted by the server allowlist.</p>'+
+    (emailJobs.length?'<div class="table-wrap"><table><thead><tr><th>Type</th><th>Status</th><th>Recipient</th><th>Attempts</th><th></th></tr></thead><tbody>'+emailJobs.map(job=>
+      '<tr><td>'+e(job.kind.replaceAll('_',' '))+'</td><td>'+badge(job.status)+'</td><td>'+e(job.recipient)+'</td><td>'+e(job.attempts)+'</td><td>'+(['failed','bounced'].includes(job.status)?'<button type="button" class="btn small outline" data-resend-email="'+e(job.id)+'">Resend</button>':'—')+'</td></tr>').join('')+'</tbody></table></div>':'<p>No email task has been queued for this order.</p>')+'</section>';
   return link(back,origin==='revenue'?'← Revenue order history':'← Overview orders','text-link')+heading(e(o.id),'Simulated payment · '+e(o.date))+'<div class="two-col">'+orderDisplay(o)+
     '<div class="form-stack"><section class="panel"><h2>Delivery address</h2><p>'+e(o.name)+'<br>'+e(o.address)+'<br>Singapore '+e(o.postal)+'</p><p>'+e(o.email)+'</p></section>'+
     '<form class="panel form-stack" id="order-editor" data-order="'+e(id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(o.status==='Cancelled'?'disabled':'')+'>'+opts(statusList,o.status)+'</select></label>'+
     field('Courier tracking number','tracking',o.tracking,'maxlength="50" '+(o.status==='Cancelled'?'readonly':''))+
     '<div class="button-row">'+(o.status==='Processing'?'<button type="submit" class="btn primary" name="ship-item">Ship Item</button>':'')+
-    '<button type="submit" class="btn '+(o.status==='Processing'?'outline':'primary')+'" '+(o.status==='Cancelled'?'disabled':'')+'>Save fulfilment</button></div></form></div></div>';
+    '<button type="submit" class="btn '+(o.status==='Processing'?'outline':'primary')+'" '+(o.status==='Cancelled'?'disabled':'')+'>Save fulfilment</button></div></form>'+emailPanel+'</div></div>';
 }
 function couponPage() {
   return heading('Coupons','Create and manage codes for the storefront.','<button class="btn primary" data-edit-coupon="">Add coupon</button>')+
