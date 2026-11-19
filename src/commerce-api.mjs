@@ -1,11 +1,10 @@
 import { ApiError } from './catalog-api.mjs';
-import { ORIGINS, bodyJSON, db, identity } from './auth-api.mjs';
+import { isAllowedOrigin, bodyJSON, db, identity } from './auth-api.mjs';
 
 const encoder=new TextEncoder();
 const safeId=value=>typeof value==='string'&&/^[a-f0-9-]{36}$/.test(value);
 const originGuard=request=>{
- const origin=request.headers.get('Origin');
- if(!ORIGINS.has(origin)||origin!==new URL(request.url).origin)throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
+ if(!isAllowedOrigin(request))throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
 };
 const stripeConfig=env=>{
  if(typeof env.STRIPE_SECRET_KEY!=='string'||!env.STRIPE_SECRET_KEY.startsWith('sk_test_')||typeof env.STRIPE_WEBHOOK_SECRET!=='string'||!env.STRIPE_WEBHOOK_SECRET.startsWith('whsec_'))

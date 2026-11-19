@@ -54,3 +54,10 @@ test('Stripe return refreshes the member cart until the signed webhook is visibl
  assert.match(source,/Promise\.all\(\[loadMemberShopping\(\),loadOrders\(\)\]\)/);
  assert.match(source,/case 'confirmation':[\s\S]*refreshCheckoutReturn\(params\.get\('session_id'\)\)/);
 });
+
+test('admin order loading includes email audit status and a controlled resend action',async()=>{
+ const [app,admin]=await Promise.all([readFile(new URL('../dist/app.js',import.meta.url),'utf8'),readFile(new URL('../dist/admin.js',import.meta.url),'utf8')]);
+ assert.match(app,/authRequest\('\/api\/admin\/email-jobs'\)/);assert.match(app,/action:'resend',jobId:data\.resendEmail/);
+ assert.match(admin,/Transactional email/);assert.match(admin,/\['failed','bounced'\]\.includes\(job\.status\)/);
+ assert.doesNotMatch(admin,/complained'\]\.includes/);
+});

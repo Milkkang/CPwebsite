@@ -6,7 +6,7 @@ const env={SUPABASE_URL:'https://tfrfkvkjmaqnpxdhxumr.supabase.co',SUPABASE_PUBL
 const userId='11111111-1111-4111-8111-111111111111',authSession='22222222-2222-4222-8222-222222222222';
 const token='header.'+Buffer.from(JSON.stringify({sub:userId,session_id:authSession,exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')+'.fake';
 const account={id:userId,email:'test@example.invalid',name:'Test',verified:true};
-const request=(path,data,{cookie,origin='https://cpvaluemart.com'}={})=>new Request('https://cpvaluemart.com'+path,{method:data===undefined?'GET':'POST',headers:{Origin:origin,...(cookie?{Cookie:cookie}:{}),...(data===undefined?{}:{'Content-Type':'application/json'})},...(data===undefined?{}:{body:JSON.stringify(data)})});
+const request=(path,data,{cookie,origin='https://cpvaluemart.com'}={})=>new Request(origin+path,{method:data===undefined?'GET':'POST',headers:{Origin:origin,...(cookie?{Cookie:cookie}:{}),...(data===undefined?{}:{'Content-Type':'application/json'})},...(data===undefined?{}:{body:JSON.stringify(data)})});
 const run=(path,data,options)=>worker.fetch(request(path,data,options),env);
 async function mocked(handler,fn){const original=globalThis.fetch;globalThis.fetch=handler;try{await fn();}finally{globalThis.fetch=original;}}
 
@@ -39,6 +39,14 @@ test('login stores only a hash and encrypted access token; cookie is opaque, Htt
   const cookie=r.headers.get('set-cookie');assert.ok(cookie.includes('HttpOnly; Secure; SameSite=Lax'));assert.ok(cookie.startsWith('__Host-cvm-session='));
   const raw=cookie.split(';')[0].split('=')[1];assert.equal(stored.session_hash,await hash(raw));assert.notEqual(stored.access_token_encrypted,token);assert.equal(await decrypt(stored.access_token_encrypted,env),token);assert.equal('refresh_token'in stored,false);
   const body=await r.text();for(const secret of [token,'not-stored',env.SUPABASE_SECRET_KEY])assert.equal(body.includes(secret),false);
+ });
+});
+
+test('project Preview origins pass the same-origin guard without allowing other workers.dev hosts',async()=>{
+ const preview='https://feature-phase-6-email-jobs-cpwebsite.milkkang93.workers.dev';
+ await mocked(async url=>new URL(url).pathname==='/auth/v1/token'?Response.json({access_token:token,expires_in:3600,user:account}):Response.json([{}]),async()=>{
+  assert.notEqual((await run('/api/auth/login',{email:account.email,password:'test'},{origin:preview})).status,403);
+  assert.equal((await run('/api/auth/login',{email:account.email,password:'test'},{origin:'https://other-project.workers.dev'})).status,403);
  });
 });
 

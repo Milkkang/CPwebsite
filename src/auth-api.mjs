@@ -1,6 +1,11 @@
 import { ApiError } from './catalog-api.mjs';
 const COOKIE='__Host-cvm-session';
 export const ORIGINS=new Set(['https://cpvaluemart.com','https://www.cpvaluemart.com']);
+export function isAllowedOrigin(request){
+ const origin=request.headers.get('Origin');let url;
+ try{url=new URL(origin);}catch{return false;}
+ return origin===new URL(request.url).origin&&(ORIGINS.has(origin)||(url.protocol==='https:'&&/^[a-z0-9-]+-cpwebsite\.milkkang93\.workers\.dev$/.test(url.hostname)));
+}
 const encoder=new TextEncoder();
 export const authRoute=path=>path.startsWith('/api/auth/')||path==='/api/profile'||path==='/api/addresses'||path.startsWith('/api/addresses/')||path==='/api/shopping'||path==='/api/admin'||path.startsWith('/api/admin/');
 const bad=(message='Check the form and try again.')=>{throw new ApiError(400,'INVALID_INPUT',message);};
@@ -73,7 +78,7 @@ export async function handleAuth(request,env) {
  const path=new URL(request.url).pathname;
  const read=request.method==='GET';
  if(!read&&request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
- if(!read){const origin=request.headers.get('Origin');if(!ORIGINS.has(origin)||origin!==new URL(request.url).origin)throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');}
+ if(!read&&!isAllowedOrigin(request))throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
  if(new URL(request.url).search)bad();
  const result=(data,cookie,status=200)=>({data,headers:cookie?{'Set-Cookie':cookie}:{},status});
  if(path==='/api/auth/session'&&read){const who=await identity(request,env,{required:false,allowRecovery:true});return result(publicIdentity(who),who?undefined:sessionCookie(''));}
