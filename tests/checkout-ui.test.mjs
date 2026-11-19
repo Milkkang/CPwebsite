@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {state} from '../dist/store.js';
 import {checkout,confirmation} from '../dist/shop.js';
 
@@ -15,4 +16,11 @@ test('checkout uses only a saved address and labels Stripe sandbox clearly',()=>
 test('Stripe return page waits for the signed webhook instead of claiming final payment state',()=>{
  const html=confirmation(new URLSearchParams('session_id=cs_test_123'));
  assert.match(html,/signed webhook is processed/);assert.doesNotMatch(html,/payment successful/i);
+});
+
+test('Stripe return refreshes the member cart until the signed webhook is visible',async()=>{
+ const source=await readFile(new URL('../dist/app.js',import.meta.url),'utf8');
+ assert.match(source,/async function refreshCheckoutReturn\(sessionId\)/);
+ assert.match(source,/Promise\.all\(\[loadMemberShopping\(\),loadOrders\(\)\]\)/);
+ assert.match(source,/case 'confirmation':[\s\S]*refreshCheckoutReturn\(params\.get\('session_id'\)\)/);
 });
