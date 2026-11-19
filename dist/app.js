@@ -11,6 +11,7 @@ let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersOwner='',ordersLoading=false;
+let checkoutReturnRefresh='';
 function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,date:String(row.createdAt).slice(0,10),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
  items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty})),
  totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt};}
@@ -18,6 +19,18 @@ async function loadOrders(){
  const owner=auth.account?.id;if(!owner||auth.recoveryOnly)return;
  ordersLoading=true;try{const result=await authRequest('/api/orders');if(auth.account?.id===owner){state.orders=result.orders.map(mapOrder);ordersOwner=owner;}}
  catch(error){message(error.message);}finally{ordersLoading=false;render();}
+}
+async function refreshCheckoutReturn(sessionId){
+ const owner=auth.account?.id;
+ if(!owner||!sessionId||checkoutReturnRefresh===sessionId)return;
+ checkoutReturnRefresh=sessionId;
+ for(let attempt=0;attempt<10&&auth.account?.id===owner;attempt++){
+  try{
+   await Promise.all([loadMemberShopping(),loadOrders()]);
+   if(!Object.keys(state.cart).length&&state.orders.some(order=>order.paymentStatus==='paid'))return;
+  }catch{}
+  await new Promise(resolve=>setTimeout(resolve,1000));
+ }
 }
 async function loadAdminProducts() {
   if(!auth.isAdmin||adminProductsLoading)return;
@@ -272,7 +285,9 @@ function render({scroll=false}={}) {
       case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
       case 'orders': body=orders(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
-      case 'confirmation': body=confirmation(params);break;
+      case 'confirmation':
+        if(auth.account&&!auth.recoveryOnly)queueMicrotask(()=>refreshCheckoutReturn(params.get('session_id')));
+        body=confirmation(params);break;
       case 'saved': body=savedPage();break;
       case 'offers': body=offers();break;
       default: body=info(key);
