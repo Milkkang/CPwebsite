@@ -2,7 +2,30 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {state} from '../dist/store.js';
-import {checkout,confirmation} from '../dist/shop.js';
+import {card,cart,checkout,confirmation,detail} from '../dist/shop.js';
+
+test('guests cannot add products to a browser basket',()=>{
+ const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
+ state.account=null;
+ const cardHtml=card(product,{quickAdd:true});
+ const detailHtml=detail(product,new URLSearchParams());
+ assert.doesNotMatch(cardHtml,/data-quick-add/);
+ assert.match(cardHtml,/Sign in to add/);
+ assert.doesNotMatch(detailHtml,/id="add-to-cart"/);
+ assert.match(detailHtml,/Sign in to add to basket/);
+ assert.match(cart(),/Sign in to your account/);
+});
+
+test('member shopping startup discards legacy guest cart instead of merging it',async()=>{
+ const source=await readFile(new URL('../dist/app.js',import.meta.url),'utf8');
+ const sync=source.match(/async function syncShopping\(\) \{[\s\S]*?\n\}/)?.[0]??'';
+ assert.match(sync,/state\.cart=\{\};state\.saved=\[\];state\.recentlyViewed=\[\];\n  save\(\);/);
+ assert.doesNotMatch(sync,/action:'merge'/);
+ assert.match(source,/throw Error\('Sign in to add products to your basket\.'\)/);
+ assert.match(source,/let shoppingOwner,shoppingLoading=false/);
+ assert.match(source,/privateBuyerRoutes=new Set\(\['\/cart'/);
+ assert.match(source,/\^\\\/product\\\//);
+});
 
 test('checkout uses only a saved address and labels Stripe sandbox clearly',()=>{
  const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);

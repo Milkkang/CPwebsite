@@ -1,5 +1,5 @@
 import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
-import {state,save,reset,escape as e,findProduct,getVariant,setCart,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
+import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
 import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
@@ -84,7 +84,7 @@ function productFormPayload(form,data) {
   if(!fields.name||!fields.variant_name||!fields.brand||!categories.some(([id])=>id===fields.category_id))throw Error('Complete the product name, variant, brand and category.');
   return {sku,fields,stock};
 }
-let shoppingOwner='',shoppingLoading=false;
+let shoppingOwner,shoppingLoading=false;
 async function loadMemberShopping() {
   const owner=auth.account?.id;
   if(!owner||auth.recoveryOnly)return;
@@ -99,17 +99,14 @@ async function loadMemberShopping() {
 async function syncShopping() {
   const owner=auth.account?.id??'';
   if(owner===shoppingOwner||shoppingLoading)return;
-  const previous=shoppingOwner;
   shoppingOwner=owner;
   if(!owner){state.cart={};state.saved=[];state.recentlyViewed=[];save();render();return;}
-  const guestCart=previous===''?Object.entries(state.cart).map(([sku,quantity])=>({sku,quantity})):[];
+  // Guest baskets are not supported. Clear any legacy browser basket before
+  // loading the authenticated member basket so refreshes can never merge it.
   state.cart={};state.saved=[];state.recentlyViewed=[];
+  save();
   shoppingLoading=true;
   try{
-    if(guestCart.length){
-      const merged=await authRequest('/api/shopping',{action:'merge',items:guestCart});
-      if(merged.skipped?.length)message(merged.skipped.length+' basket item(s) changed or became unavailable. Review your basket.');
-    }
     await loadMemberShopping();
   }catch(error){message(error.message);}
   finally{shoppingLoading=false;render();}
@@ -120,12 +117,7 @@ async function setShoppingCart(sku,quantity) {
     await loadMemberShopping();
     return;
   }
-  if(quantity){
-    const live=listingFromApi((await catalogRequest('/api/products/'+encodeURIComponent(sku))).product);
-    rememberListings([live]);
-  }
-  const error=setCart(sku,quantity);
-  if(error)throw Error(error);
+  throw Error('Sign in to add products to your basket.');
 }
 function storefrontKey(path,params) { return path+'?'+params.toString(); }
 function rememberListings(rows) {
@@ -216,7 +208,7 @@ document.addEventListener('error',event=>{
 const previousAdminRoutes=new Map([
   ['/admin/reports','/admin'],['/admin/orders','/admin'],['/admin/media','/admin/products'],['/admin/inventory','/admin/products']
 ]);
-const privateBuyerRoutes=new Set(['/orders','/saved','/recently-viewed','/confirmation']);
+const privateBuyerRoutes=new Set(['/cart','/orders','/saved','/recently-viewed','/confirmation']);
 function route() {
   const hash=location.hash.slice(1) || (location.pathname==='/'||location.pathname.endsWith('.html')?'/':location.pathname);
   const [path,qs='']=hash.split('?');
@@ -240,6 +232,7 @@ function returnAfterSignIn(next) {
   const [path,qs='']=next.split('?');
   if(path==='checkout'||path==='/checkout') return navigate('/checkout');
   if(path==='/admin'&&auth.isAdmin)return navigate('/admin');
+  if(/^\/product\/[A-Za-z0-9_-]{1,100}$/.test(path))return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
   if(privateBuyerRoutes.has(path)) return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
   navigate('/account');
 }
@@ -444,6 +437,7 @@ document.addEventListener('click', async event=>{
     [...document.querySelectorAll('[data-save]')].find(b=>b.dataset.save===data.save)?.focus({preventScroll:true});
     message(saved?'Removed from saved items.':'Added to saved items.');
   } else if('quickAdd' in data) {
+    if(!auth.account||auth.recoveryOnly){navigate('/account',{next:'/cart'});message('Sign in to add products to your basket.');return;}
     const sku=data.quickAdd;
     let live;
     try{live=listingFromApi((await catalogRequest('/api/products/'+encodeURIComponent(sku))).product);rememberListings([live]);}
