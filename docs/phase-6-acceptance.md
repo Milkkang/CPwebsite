@@ -58,8 +58,8 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 
 ## Release evidence to complete
 
-- PR URL, head SHA and merge SHA: pending.
-- GitHub Actions: pending.
+- Draft PR: [#18](https://github.com/Milkkang/CPwebsite/pull/18), head `4ec72b3dd867b1f7fc11e9b004b6550e64eb7dc7`; merge SHA pending.
+- GitHub Actions Phase checks run `44528482629` (run 83): success.
 - Cloudflare Preview URL/build: pending.
 - Supabase migration application: not performed.
 - Resend webhook/configuration: not performed.
