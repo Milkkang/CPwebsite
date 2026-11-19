@@ -48,6 +48,25 @@ test('outbox reconciliation failure does not stop existing due email jobs',async
  assert.equal(claimed,true);
 });
 
+test('cancellation and sandbox refund templates stay labelled and allowlisted',async()=>{
+ const jobs=['cancellation','test_refund'].map((kind,index)=>({id:`11111111-1111-4111-8111-11111111111${index}`,kind,
+  recipient:'acceptance@example.invalid',payload:{orderNumber:'CVM-1004',total:1340},is_test:true,
+  idempotency_key:`${kind}/acceptance`,attempt_count:1}));
+ const sent=[];
+ await mocked(async(url,options)=>{
+  if(String(url).includes('reconcile_email_confirmations'))return Response.json(0);
+  if(String(url).includes('claim_email_jobs'))return Response.json(jobs);
+  if(String(url)==='https://api.resend.com/emails'){
+   sent.push(JSON.parse(options.body));return Response.json({id:`email_test_${sent.length}`});
+  }
+  if(String(url).includes('finish_email_attempt'))return Response.json(true);
+  throw Error('Unexpected request '+url);
+ },async()=>assert.deepEqual(await processEmailJobs(env),{processed:2,configured:true}));
+ assert.equal(sent.length,2);
+ for(const message of sent){assert.deepEqual(message.to,['acceptance@example.invalid']);assert.match(message.subject,/^\[TEST ORDER\]/);assert.match(message.text,/No real payment or revenue/);}
+ assert.match(sent[0].subject,/cancelled/);assert.match(sent[1].subject,/refund/);
+});
+
 async function signedWebhook(event,id='msg_test_1'){
  const raw=JSON.stringify(event),timestamp=String(Math.floor(Date.now()/1000));
  const key=await crypto.subtle.importKey('raw',Buffer.from('webhook-test-secret'),{name:'HMAC',hash:'SHA-256'},false,['sign']);
