@@ -10,7 +10,7 @@ test('traffic accepts only same-origin bounded events and writes through service
  const previous=globalThis.fetch,events=[];
  globalThis.fetch=async(url,options)=>{
   assert.equal(options.headers.apikey,env.SUPABASE_SECRET_KEY);
-  if(String(url).endsWith('/consume_auth_limit'))return Response.json(true);
+  if(String(url).endsWith('/consume_auth_limit')){const limit=JSON.parse(options.body);assert.equal(limit.p_limit,100);assert.equal(limit.p_seconds,60);return Response.json(true);}
   if(String(url).endsWith('/record_site_traffic')){events.push(JSON.parse(options.body).p_event);return Response.json(null);}
   throw Error('Unexpected database request');
  };

@@ -8,7 +8,7 @@ export async function recordTraffic(request,env){
  const data=await bodyJSON(request,256);
  if(Object.keys(data).length!==1||!['visit','cart'].includes(data.event))throw new ApiError(400,'INVALID_INPUT','Invalid traffic event.');
  const key=await hash(env.SUPABASE_SECRET_KEY+'|traffic|'+(request.headers.get('CF-Connecting-IP')??'unknown'));
- const limited=await db(env,'rpc/consume_auth_limit',{method:'POST',body:{p_key:key,p_limit:600,p_seconds:3600}});
+ const limited=await db(env,'rpc/consume_auth_limit',{method:'POST',body:{p_key:key,p_limit:100,p_seconds:60}});
  if(limited.data!==true)throw new ApiError(429,'TOO_MANY_EVENTS','Traffic limit reached.');
  await db(env,'rpc/record_site_traffic',{method:'POST',body:{p_event:data.event}});
  return {data:{recorded:true},status:202};
