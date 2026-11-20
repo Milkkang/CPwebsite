@@ -4,8 +4,8 @@ This is internal engineering acceptance under the autonomous workflow. It does n
 
 ## Verified application
 
-- Application commit: `d608a1d` (subsequent documentation/CI verification changes do not alter application bytes).
-- Production: https://cpvaluemart.com ; verified Worker `2326978e-31e0-4a31-9b43-05a7a19767ec`, health Phase 8.
+- Original application checkpoint: local `d608a1d`. Final canonical main commit: `ac0c1dfc28b13dad7aa3d537568305c11b07cc34`; GitHub tree SHA exactly matched the full locally verified delivery tree `65c32a1688682036201367da5ac9711815761331`. The original local commit branch is retained.
+- Production: https://cpvaluemart.com ; verified application release (the original accepted Worker `2326978e-31e0-4a31-9b43-05a7a19767ec` is retained as a compatible recovery point), health Phase 8.
 - Preview: https://feature-phase-6-email-jobs-cpwebsite.milkkang93.workers.dev ; deployment `281b7bfd-9ec1-4f56-8784-a3a00d7debf1` verified public catalog, Supabase access and authentication.
 - Production public catalog after QA cleanup: 678 listings, 11 categories, 72 brands. All 678 distinct R2 image URLs returned successful image HEAD responses.
 - No React migration was attempted: the actual supported frontend remains native JavaScript with a Cloudflare Worker.
@@ -54,4 +54,5 @@ The user explicitly authorized a dedicated synthetic buyer and temporary checkou
 - Preview has no independent Stripe secret configuration; payment end-to-end acceptance used the controlled production test workflow. Preview payment configuration is not falsely marked verified.
 - Supabase reports its existing leaked-password-protection warning. Enabling a paid feature or changing the plan was outside this release; no plan upgrade was performed.
 - The code-only rollback procedure and schema/data preservation boundary are in [operations](operations.md). No destructive production restore or real payment was performed.
-- Final main CI/build synchronization is recorded in STATUS after the pipeline completes. No per-Phase PR or artificial approval was created.
+- Final GitHub [Phase checks run 44707639113](https://github.com/Milkkang/CPwebsite/actions/runs/44707639113) passed. Existing Pages dynamic build also passed. The Cloudflare automatic production build succeeded for the same canonical main SHA. Final production smoke passed after deployment. No per-Phase PR or artificial approval was created.
+- Authenticated end-to-end QA ran on manually deployed version `2326978e-31e0-4a31-9b43-05a7a19767ec`; final CI rebuilt the identical application source. Local Git CLI lacked HTTPS write credentials, so the existing GitHub connector published an identical tree as a fast-forward delivery commit. No force push or protection change was used; continued local work is on `dev/autonomous`.
