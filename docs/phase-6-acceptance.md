@@ -80,3 +80,15 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 - Redeploy the last Phase 5 Worker version for code rollback.
 - Do not drop email tables or delete order, payment, inventory, webhook, job, attempt, suppression or delivery-event records as part of code rollback.
 - The migration is additive. A destructive database rollback requires separate approval and a data-retention plan.
+
+## Recovery completion verification — 2026-11-20
+
+- Reviewed PR #19 at `0ecae45d951c37a011ac4a479c31602614142655`; its latest GitHub Phase checks run `44635503854` passed. This is not CI evidence for later local changes.
+- Corrected the isolated PostgreSQL complaint-suppression assertion so its own failure cannot be swallowed; added a database check that bounced recipients cannot be retried automatically and that an explicit admin resend can claim its audited override child.
+- This local revision passed `npm test` (47 tests and product-editing regression), `npm run build`, `npm run test:runtime` (2 tests), `PG_BIN=/opt/homebrew/opt/postgresql@17/bin npm run test:db`, and `git diff --check`. Build/runtime/database checks required a local sandbox exception for sockets; no production database was used by these tests.
+- Read-only production preflight: recovery outbox absent; 3 email jobs; 0 pending/sending jobs; 0 duplicate manual parents; 0 unmatched delivery events. Production still serves Worker `e0b28acf-0ecc-40d4-ada9-638645af2900` at 100%.
+- Release candidate migration: `20261120070000_phase6_delivery_recovery.sql`, SHA-256 `43a990d3f863390fc0974e3dc16e10cbf11e6d9d714c47fbb90fce533c275911`. It must be applied before the recovery Worker is released. Existing data and audit history remain intact.
+- Production release, applying this migration, publishing the new acceptance evidence, and sending an acceptance message are awaiting explicit authorization for this recovery release. No such action has been performed in this completion session.
+- After authorization: publish the tested changes to PR #19; confirm latest CI/review and actual Builds trigger behavior; apply the reviewed additive migration once; merge/release once; verify the resulting version, health, cron and rejection of unsigned callbacks. If automatic Builds performs the approved release, do not repeat a CLI production deployment.
+- Final production acceptance must observe a `[TEST ORDER]` message sent only to `milkkang93@gmail.com`, its real signed delivery event, and replay without another message. Do not read buyer addresses or credentials. Do not manufacture provider events or expose signing secrets. Keep remaining production/manual checks explicit until independently completed or expressly deferred by the user.
+- Rollback remains code-only to Worker `e0b28acf-0ecc-40d4-ada9-638645af2900`; retain recovery schema, existing orders, inventory, jobs and delivery audits. Stop before Phase 7.

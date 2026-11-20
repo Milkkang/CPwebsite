@@ -77,7 +77,7 @@ drop trigger phase6_test_reject_enqueue on public.email_jobs;
 drop function public.phase6_test_reject_enqueue();
 
 do $$
-declare test_order uuid; admin_id uuid; first_resend uuid; second_resend uuid; retry_job uuid;
+declare test_order uuid; admin_id uuid; first_resend uuid; second_resend uuid; retry_job uuid; complaint_rejected boolean:=false;
 begin
  if public.reconcile_email_confirmations(25)<>1 then raise exception 'outbox recovery did not enqueue'; end if;
  if not exists(select 1 from public.email_confirmation_outbox where event_id='evt_payment_email_failure' and enqueued_at is not null) then raise exception 'outbox not marked recovered'; end if;
@@ -93,9 +93,11 @@ begin
  if (select count(*) from public.email_job_attempts where job_id=retry_job and attempt=4)<>1 then raise exception 'last attempt not audited'; end if;
  begin
   perform public.admin_resend_email(admin_id,retry_job);
-  raise exception 'complaint suppression was bypassed';
- exception when sqlstate 'P0001' then null;
+ exception when sqlstate 'P0001' then
+  if sqlerrm<>'RESEND_NOT_ALLOWED' then raise; end if;
+  complaint_rejected:=true;
  end;
+ if not complaint_rejected then raise exception 'complaint suppression was bypassed'; end if;
  delete from public.email_suppressions where recipient_hash=public.email_recipient_hash('acceptance@example.invalid');
  first_resend:=public.admin_resend_email(admin_id,retry_job);
  second_resend:=public.admin_resend_email(admin_id,retry_job);
@@ -162,5 +164,27 @@ begin
  perform public.admin_update_order(admin_id,test_order,initial_version+1,'Shipped','TRACK-TEST-1');
  if (select count(*) from public.email_jobs where order_id=test_order and kind='shipment')<>1 then
   raise exception 'repeated shipped save enqueued another email';
+ end if;
+end $$;
+
+-- A bounce blocks automatic sends; only the explicit, audited admin child may retry.
+do $$
+declare test_order uuid; admin_id uuid; bounced_job uuid; blocked_job uuid; manual_job uuid; claimed jsonb;
+begin
+ select order_id into test_order from public.email_confirmation_outbox where event_id='evt_phase6_1';
+ select user_id into admin_id from public.orders where id=test_order;
+ select id into bounced_job from public.email_jobs where idempotency_key='cancellation/acceptance/event-order';
+ blocked_job:=public.enqueue_order_email(test_order,'cancellation','acceptance/bounce-block');
+ claimed:=public.claim_email_jobs(25);
+ if exists(select 1 from jsonb_array_elements(claimed) item where item->>'id'=blocked_job::text) then
+  raise exception 'bounce suppression allowed automatic retry';
+ end if;
+ manual_job:=public.admin_resend_email(admin_id,bounced_job);
+ if not (select override_bounce_suppression from public.email_jobs where id=manual_job) then
+  raise exception 'explicit resend did not retain its bounce override';
+ end if;
+ claimed:=public.claim_email_jobs(25);
+ if not exists(select 1 from jsonb_array_elements(claimed) item where item->>'id'=manual_job::text) then
+  raise exception 'explicit bounced resend could not be claimed';
  end if;
 end $$;
