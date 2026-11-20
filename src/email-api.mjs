@@ -20,6 +20,7 @@ function template(job){
  const content={
   order_confirmation:['Test order confirmed',`We received test order ${number}. Total: ${total}.`,`We received <strong>${number}</strong>. Test total: <strong>${total}</strong>.`],
   shipment:['Test order shipped',`Test order ${number} has shipped. Tracking: ${tracking}.`,`<strong>${number}</strong> has shipped. Tracking: <strong>${tracking}</strong>.`],
+  delivery:['Test order delivered',`Test order ${number} has been marked as delivered.`,`<strong>${number}</strong> has been marked as delivered.`],
   cancellation:['Test order cancelled',`Test order ${number} was cancelled.`,`<strong>${number}</strong> was cancelled.`],
   test_refund:['Test refund recorded',`A Stripe sandbox refund was recorded for ${number}.`,`A Stripe sandbox refund was recorded for <strong>${number}</strong>.`]
  }[job.kind];

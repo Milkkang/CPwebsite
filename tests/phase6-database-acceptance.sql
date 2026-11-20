@@ -5,7 +5,6 @@ begin
  return new;
 end $$;
 
-
 do $$
 begin
  if has_function_privilege('anon','public.reconcile_email_confirmations(integer)','EXECUTE') or
@@ -165,6 +164,14 @@ begin
  if (select count(*) from public.email_jobs where order_id=test_order and kind='shipment')<>1 then
   raise exception 'repeated shipped save enqueued another email';
  end if;
+ perform public.admin_update_order(admin_id,test_order,initial_version+2,'Delivered','TRACK-TEST-1');
+ if (select count(*) from public.email_jobs where order_id=test_order and kind='delivery')<>1 then
+  raise exception 'first delivered transition did not enqueue exactly once';
+ end if;
+ perform public.admin_update_order(admin_id,test_order,initial_version+3,'Delivered','TRACK-TEST-1');
+ if (select count(*) from public.email_jobs where order_id=test_order and kind='delivery')<>1 then
+  raise exception 'repeated delivered save enqueued another email';
+ end if;
 end $$;
 
 -- A bounce blocks automatic sends; only the explicit, audited admin child may retry.
@@ -187,4 +194,72 @@ begin
  if not exists(select 1 from jsonb_array_elements(claimed) item where item->>'id'=manual_job::text) then
   raise exception 'explicit bounced resend could not be claimed';
  end if;
+end $$;
+
+-- Only a matching, signed test Checkout failure/expiry releases the pending order
+-- and queues one cancellation email. A replay or mismatch cannot create another.
+do $$
+declare test_user uuid; test_address uuid; expired_order uuid; failed_order uuid; paid_order uuid; result jsonb;
+begin
+ select a.user_id,a.id into test_user,test_address from public.buyer_addresses a limit 1;
+ insert into public.orders(user_id,address_id,subtotal_cents,shipping_cents,discount_cents,total_cents,stripe_checkout_session_id)
+ values(test_user,test_address,1000,0,0,1000,'cs_test_cancel_expired') returning id into expired_order;
+ result:=public.apply_test_payment_event('evt_cancel_mismatch','checkout.session.expired',false,expired_order,'cs_test_wrong','',1000,'sgd');
+ if result->>'outcome'<>'payment_mismatch' or (select payment_status from public.orders where id=expired_order)<>'pending' then
+  raise exception 'mismatched expiry changed an order'; end if;
+ result:=public.apply_test_payment_event('evt_cancel_missing_amount','checkout.session.expired',false,expired_order,'cs_test_cancel_expired','',null,'sgd');
+ if result->>'outcome'<>'payment_mismatch' or (select payment_status from public.orders where id=expired_order)<>'pending' then
+  raise exception 'incomplete expiry changed an order'; end if;
+ result:=public.apply_test_payment_event('evt_cancel_expired','checkout.session.expired',false,expired_order,'cs_test_cancel_expired','',1000,'sgd');
+ if result->>'outcome'<>'released' or not exists(select 1 from public.orders where id=expired_order and payment_status='failed' and fulfilment_status='Cancelled') then
+  raise exception 'matching expiry did not release the order'; end if;
+ if (select count(*) from public.email_jobs where order_id=expired_order and kind='cancellation')<>1 or
+    not exists(select 1 from public.email_confirmation_outbox where event_id='evt_cancel_expired' and kind='cancellation' and enqueued_at is not null) then
+  raise exception 'expiry cancellation email was not durably queued'; end if;
+ result:=public.apply_test_payment_event('evt_cancel_expired','checkout.session.expired',false,expired_order,'cs_test_cancel_expired','',1000,'sgd');
+ if result->>'duplicate'<>'true' or (select count(*) from public.email_jobs where order_id=expired_order and kind='cancellation')<>1 then
+  raise exception 'expiry replay duplicated the email'; end if;
+ insert into public.orders(user_id,address_id,subtotal_cents,shipping_cents,discount_cents,total_cents,stripe_checkout_session_id)
+ values(test_user,test_address,1000,0,0,1000,'cs_test_cancel_failed') returning id into failed_order;
+ result:=public.apply_test_payment_event('evt_cancel_failed','checkout.session.async_payment_failed',false,failed_order,'cs_test_cancel_failed','',1000,'sgd');
+ if result->>'outcome'<>'released' or (select count(*) from public.email_jobs where order_id=failed_order and kind='cancellation')<>1 then
+  raise exception 'failed test payment did not queue cancellation email'; end if;
+ select order_id into paid_order from public.email_confirmation_outbox where event_id='evt_phase6_1';
+ result:=public.apply_test_payment_event('evt_cancel_paid','checkout.session.expired',false,paid_order,'cs_test_phase6_1','',1000,'sgd');
+ if result->>'outcome'<>'payment_mismatch' or (select payment_status from public.orders where id=paid_order)<>'paid' or
+    exists(select 1 from public.email_jobs where order_id=paid_order and idempotency_key='cancellation/stripe/evt_cancel_paid') then
+  raise exception 'late expiry cancelled a paid order'; end if;
+end $$;
+
+create function public.phase6_test_reject_cancellation() returns trigger language plpgsql as $$
+begin
+ if new.idempotency_key='cancellation/stripe/evt_cancel_email_failure' then raise exception 'synthetic cancellation email failure'; end if;
+ return new;
+end $$;
+create trigger phase6_test_reject_cancellation before insert on public.email_jobs
+for each row execute function public.phase6_test_reject_cancellation();
+
+do $$
+declare test_user uuid; test_address uuid; failed_order uuid; result jsonb;
+begin
+ select a.user_id,a.id into test_user,test_address from public.buyer_addresses a limit 1;
+ insert into public.orders(user_id,address_id,subtotal_cents,shipping_cents,discount_cents,total_cents,stripe_checkout_session_id)
+ values(test_user,test_address,1000,0,0,1000,'cs_test_cancel_email_failure') returning id into failed_order;
+ result:=public.apply_test_payment_event('evt_cancel_email_failure','checkout.session.expired',false,failed_order,'cs_test_cancel_email_failure','',1000,'sgd');
+ if result->>'outcome'<>'released' or not exists(select 1 from public.orders where id=failed_order and payment_status='failed' and fulfilment_status='Cancelled') then
+  raise exception 'email error rolled back the Checkout release'; end if;
+ if not exists(select 1 from public.email_confirmation_outbox where event_id='evt_cancel_email_failure' and kind='cancellation' and enqueued_at is null and last_error_code is not null) then
+  raise exception 'cancellation outbox did not retain email failure'; end if;
+end $$;
+
+drop trigger phase6_test_reject_cancellation on public.email_jobs;
+drop function public.phase6_test_reject_cancellation();
+
+do $$
+declare test_order uuid;
+begin
+ if public.reconcile_email_confirmations(25)<1 then raise exception 'cancellation email was not reconciled'; end if;
+ select order_id into test_order from public.email_confirmation_outbox where event_id='evt_cancel_email_failure' and enqueued_at is not null;
+ if test_order is null or (select count(*) from public.email_jobs where order_id=test_order and kind='cancellation')<>1 then
+  raise exception 'cancellation email recovery did not queue once'; end if;
 end $$;
