@@ -36,6 +36,22 @@ test('email worker fails closed before Resend when the test recipient is not all
  assert.equal(finished.p_success,false);assert.equal(finished.p_retryable,false);assert.equal(finished.p_error,'RECIPIENT_NOT_ALLOWED');
 });
 
+test('delivery notice remains a single allowlisted test email',async()=>{
+ const job={id:'11111111-1111-4111-8111-111111111112',kind:'delivery',recipient:'acceptance@example.invalid',
+  payload:{orderNumber:'CVM-1004'},is_test:true,idempotency_key:'delivery/order/version',attempt_count:1};
+ let sent;
+ await mocked(async(url,options)=>{
+  if(String(url).includes('reconcile_email_confirmations'))return Response.json(0);
+  if(String(url).includes('claim_email_jobs'))return Response.json([job]);
+  if(String(url)==='https://api.resend.com/emails'){sent=JSON.parse(options.body);return Response.json({id:'email_delivery_test'});}
+  if(String(url).includes('finish_email_attempt'))return Response.json(true);
+  throw Error('Unexpected request '+url);
+ },async()=>assert.deepEqual(await processEmailJobs(env),{processed:1,configured:true}));
+ assert.deepEqual(sent.to,['acceptance@example.invalid']);
+ assert.match(sent.subject,/^\[TEST ORDER\] Test order delivered/);
+ assert.match(sent.text,/marked as delivered/);
+});
+
 test('outbox reconciliation failure does not stop existing due email jobs',async()=>{
  let claimed=false;const originalError=console.error;console.error=()=>{};
  try{

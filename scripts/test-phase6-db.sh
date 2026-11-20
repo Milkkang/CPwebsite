@@ -33,4 +33,16 @@ rg -q '"outcome": "paid"' "$PG_TEST_DIR/payment-1.txt" "$PG_TEST_DIR/payment-2.t
 rg -q '"duplicate": true' "$PG_TEST_DIR/payment-1.txt" "$PG_TEST_DIR/payment-2.txt"
 test "$("${PSQL[@]}" -Atc "select count(*) from public.inventory_movements where source_key like 'stripe:evt_phase6_concurrent:%'")" = 1
 test "$("${PSQL[@]}" -Atc "select count(*) from public.email_jobs where idempotency_key='order_confirmation/stripe/evt_phase6_concurrent'")" = 1
+"$PG_BIN/createdb" -h "$PG_TEST_DIR" -p "$PG_PORT" cpwebsite_backfill
+PSQL_BACKFILL=("$PG_BIN/psql" -h "$PG_TEST_DIR" -p "$PG_PORT" -d cpwebsite_backfill -v ON_ERROR_STOP=1 -q)
+sed '/^create role /d' tests/phase6-postgres-bootstrap.sql | "${PSQL_BACKFILL[@]}" >/dev/null
+for migration in supabase/migrations/*.sql; do "${PSQL_BACKFILL[@]}" -f "$migration" >/dev/null; done
+"${PSQL_BACKFILL[@]}" -f tests/phase6-backfill-fixture.sql >/dev/null
+"${PSQL_BACKFILL[@]}" -f scripts/ops/backfill-cvm-1005-delivery.sql >/dev/null
+if "${PSQL_BACKFILL[@]}" -f scripts/ops/backfill-cvm-1005-delivery.sql >/dev/null 2>&1; then
+  echo 'Backfill unexpectedly accepted a duplicate delivery email' >&2
+  exit 1
+fi
+test "$("${PSQL_BACKFILL[@]}" -Atc "select count(*) from public.email_jobs j join public.orders o on o.id=j.order_id where o.order_number=1005 and j.kind='delivery' and j.is_test and j.status='pending'")" = 1
+test "$("${PSQL_BACKFILL[@]}" -Atc "select count(*) from public.orders where order_number=1005 and payment_status='paid' and fulfilment_status='Delivered'")" = 1
 echo 'PASS: Phase 6 isolated PostgreSQL acceptance'
