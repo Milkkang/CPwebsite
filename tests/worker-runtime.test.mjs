@@ -55,3 +55,32 @@ test('real Workers auth runtime encrypts sessions and serves protected callback 
   assert.equal(callback.status,200);assert.equal(assetPath,'/');assert.equal(callback.headers.get('referrer-policy'),'no-referrer');assert.ok(callback.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
  }finally{await mf.dispose();}
 });
+
+test('real Workers checkout creates test sessions and rejects provider redirects without following them',async()=>{
+ const origin='https://tfrfkvkjmaqnpxdhxumr.supabase.co';
+ const user='11111111-1111-4111-8111-111111111111',order='99999999-9999-4999-8999-999999999999';
+ let redirect=false,stripeCalls=0,releases=0;
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:true,
+  script:await readFile('.cloudflare/output/v1/workers/default/bundle/index.js','utf8'),compatibilityDate:'2026-11-17',
+  bindings:{SUPABASE_URL:origin,SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixture',SUPABASE_SECRET_KEY:'sb_secret_fixture',STRIPE_SECRET_KEY:'sk_test_fixture',STRIPE_WEBHOOK_SECRET:'whsec_fixture',TRANSACTIONAL_EMAIL_TEST_RECIPIENTS:'runtime@example.invalid'},
+  outboundService:async request=>{
+   const url=new URL(request.url);const json=data=>new RuntimeResponse(JSON.stringify(data),{headers:{'content-type':'application/json'}});
+   if(url.origin==='https://api.stripe.com'){
+    assert.equal(url.pathname,'/v1/checkout/sessions');stripeCalls++;
+    const form=new URLSearchParams(await request.text());assert.equal(form.get('line_items[0][price_data][unit_amount]'),'100');
+    return redirect?new RuntimeResponse(null,{status:302,headers:{location:'https://never-follow.example/secret'}}):json({id:'cs_test_runtime',url:'https://checkout.stripe.com/c/pay/cs_test_runtime',livemode:false});
+   }
+   assert.equal(url.origin,origin,'must never forward authorization to a redirect target');
+   if(url.pathname.endsWith('resolve_web_session'))return json({account:{id:user,email:'runtime@example.invalid',verified:true},isAdmin:false});
+   if(url.pathname.endsWith('create_test_order'))return json({id:order,number:'CVM-RUNTIME',total_cents:100,items:[]});
+   if(url.pathname.endsWith('attach_test_checkout'))return json(true);
+   if(url.pathname.endsWith('release_test_order')){releases++;return json(true);}
+   throw Error('Unexpected runtime fixture route');
+  }
+ }));
+ try{
+  const call=()=>mf.dispatchFetch('https://cpvaluemart.com/api/checkout/session',{method:'POST',headers:{Origin:'https://cpvaluemart.com',Cookie:'__Host-cvm-session='+'a'.repeat(64),'Content-Type':'application/json'},body:JSON.stringify({addressId:'88888888-8888-4888-8888-888888888888'})});
+  assert.equal((await call()).status,201);redirect=true;assert.equal((await call()).status,503);
+  assert.equal(stripeCalls,2);assert.equal(releases,1);
+ }finally{await mf.dispose();}
+});

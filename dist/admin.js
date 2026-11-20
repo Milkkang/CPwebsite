@@ -52,14 +52,14 @@ function revenueSelection(params,today=orderDate()) {
   const orders=state.orders.filter(o=>o.date>=period.from&&o.date<=period.to).sort((a,b)=>b.date.localeCompare(a.date));
   return {range,period,orders,dateError};
 }
-const orderRevenue=order=>order.status==='Cancelled'?0:order.totals.total;
+const orderRevenue=()=>0;
 function revenuePage(params) {
   const today=orderDate();
   const {range,period,orders,dateError}=revenueSelection(params,today);
   const metric=revenueMetric(params.get('metric'));
   const filters={range,...(range==='custom'?period:{})};
   const orderLinks={origin:'revenue',...filters,metric:metric.key};
-  return heading('Revenue','Review order history and export a CSV for the selected dates.',
+  return heading('Revenue','TEST MODE: all orders are simulated. Real revenue is S$0.00; traffic is not collected.',
     '<button type="button" class="btn primary" data-export="revenue">Generate Report</button>')+
     '<section class="panel revenue-period" aria-labelledby="revenue-period-title"><div class="section-title"><h2 id="revenue-period-title">Date range</h2><span class="subtle">Singapore time</span></div>'+
     '<nav class="period-options" aria-label="Revenue date presets">'+periods.map(([key,label])=>
@@ -86,7 +86,7 @@ function overview(params) {
     (o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(!status||o.status===status)
   ).sort((a,b)=>b.date.localeCompare(a.date));
   const valid=periodOrders.filter(o=>o.status!=='Cancelled');
-  return heading('Overview','Store performance · Singapore time',go('/admin/products/new','Add product','btn primary'))+
+  return heading('Overview','TEST MODE · Simulated orders; real revenue S$0.00. Traffic is not collected.',go('/admin/products/new','Add product','btn primary'))+
     '<div class="period-control"><nav class="period-options" aria-label="Order date range">'+periods.map(([key,label])=>
       '<a class="btn small '+(key===range?'chosen':'outline')+'" href="'+e(href('/admin',{...filters,range:key}))+'"'+(key===range?' aria-current="true"':'')+'>'+label+'</a>'
     ).join('')+'</nav><p class="subtle">'+(from===to?to:from+' to '+to)+'</p></div>'+
@@ -107,7 +107,7 @@ function productList(params) {
   const rows=productSearch(q,status).map(p=>({p,variants:low?p.variants.filter(v=>v.stock<=5):p.variants}))
     .filter(row=>row.variants.length);
   return heading('Products',rows.length+' of '+state.products.length+' products',
-    '<button class="btn outline" data-export="products">Export CSV</button>'+go('/admin/products/new','Add product','btn primary'))+
+    '<button class="btn outline" data-export="products">Export CSV</button><button class="btn outline" data-export="template">Import template</button><label class="btn outline">Import CSV / Excel<input type="file" id="import-csv" accept=".csv,.xlsx" hidden></label>'+go('/admin/products/new','Add product','btn primary'))+
     '<p class="subtle import-hint">Edit variant name, price, MOQ or status directly; changes save when you leave the field.</p>'+
     '<form class="admin-filters" id="admin-filter" data-path="/admin/products">'+field('Find product','q',q,'placeholder="Name, brand or SKU"')+
     '<label>Status<select name="status"><option value="">All statuses</option>'+opts(['Published','Draft','Archived'],status)+'</select></label>'+
@@ -192,10 +192,10 @@ function orderEditor(id,params) {
       '<tr><td>'+e(job.kind.replaceAll('_',' '))+'</td><td>'+badge(job.status)+'</td><td>'+e(job.recipient)+'</td><td>'+e(job.attempts)+'</td><td>'+(['failed','bounced'].includes(job.status)?'<button type="button" class="btn small outline" data-resend-email="'+e(job.id)+'">Resend</button>':'—')+'</td></tr>').join('')+'</tbody></table></div>':'<p>No email task has been queued for this order.</p>')+'</section>';
   return link(back,origin==='revenue'?'← Revenue order history':'← Overview orders','text-link')+heading(e(o.id),'Simulated payment · '+e(o.date))+'<div class="two-col">'+orderDisplay(o)+
     '<div class="form-stack"><section class="panel"><h2>Delivery address</h2><p>'+e(o.name)+'<br>'+e(o.address)+'<br>Singapore '+e(o.postal)+'</p><p>'+e(o.email)+'</p></section>'+
-    '<form class="panel form-stack" id="order-editor" data-order="'+e(id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(o.status==='Cancelled'?'disabled':'')+'>'+opts(statusList,o.status)+'</select></label>'+
+    '<form class="panel form-stack" id="order-editor" data-order="'+e(id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>'+opts(o.status==='Processing'?['Processing','Shipped']:o.status==='Shipped'?['Shipped','Delivered']:[o.status],o.status)+'</select></label>'+
     field('Courier tracking number','tracking',o.tracking,'maxlength="50" '+(o.status==='Cancelled'?'readonly':''))+
-    '<div class="button-row">'+(o.status==='Processing'?'<button type="submit" class="btn primary" name="ship-item">Ship Item</button>':'')+
-    '<button type="submit" class="btn '+(o.status==='Processing'?'outline':'primary')+'" '+(o.status==='Cancelled'?'disabled':'')+'>Save fulfilment</button></div></form>'+emailPanel+'</div></div>';
+    '<div class="button-row">'+(o.status==='Processing'&&o.paymentStatus==='paid'?'<button type="submit" class="btn primary" name="ship-item">Ship Item</button>':'')+
+    '<button type="submit" class="btn '+(o.status==='Processing'?'outline':'primary')+'" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>Save fulfilment</button></div></form>'+(['pending','paid'].includes(o.paymentStatus)?'<section class="panel form-stack"><h2>Test order operations</h2><p>No real funds are involved. A completed refund closes the order.</p><label class="check-label"><input type="checkbox" id="refund-restock"'+checked(o.status==='Processing')+'> Return items to stock (confirm items are available)</label><button type="button" class="btn outline" data-order-action="'+e(o.paymentStatus==='pending'?'cancel':'refund')+'" data-order-id="'+e(o.id)+'">'+(o.paymentStatus==='pending'?'Cancel unpaid test order':'Refund test payment')+'</button></section>':'')+emailPanel+'</div></div>';
 }
 function couponPage() {
   return heading('Coupons','Create and manage codes for the storefront.','<button class="btn primary" data-edit-coupon="">Add coupon</button>')+
@@ -226,12 +226,12 @@ function salesTables(orders) {
   }
   const days=[...revenue.entries()].sort(([a],[b])=>b.localeCompare(a));
   const top=[...products.values()].sort((a,b)=>b.units-a.units||b.total-a.total).slice(0,10);
-  return '<div class="section-title admin-section"><h2>Daily sales</h2></div>'+table(['Date','Orders','Sales'],days.map(([date,day])=>'<tr><td>'+e(date)+'</td><td>'+day.orders+'</td><td>'+cash(day.total)+'</td></tr>').join('')||'<tr><td colspan="3">No sales recorded.</td></tr>')+
-    '<div class="section-title admin-section"><h2>Top products by units</h2></div>'+table(['Product','Units','Merchandise subtotal'],top.map(p=>'<tr><td>'+productLabel(findProduct(p.id)??p,e(p.name))+'</td><td>'+p.units+'</td><td>'+cash(p.total)+'</td></tr>').join('')||'<tr><td colspan="3">No products sold.</td></tr>');
+  return '<div class="section-title admin-section"><h2>Simulated daily sales</h2></div>'+table(['Date','Test orders','Test totals (not revenue)'],days.map(([date,day])=>'<tr><td>'+e(date)+'</td><td>'+day.orders+'</td><td>'+cash(day.total)+'</td></tr>').join('')||'<tr><td colspan="3">No sales recorded.</td></tr>')+
+    '<div class="section-title admin-section"><h2>Top products by units</h2></div>'+table(['Product','Test units','Test merchandise subtotal'],top.map(p=>'<tr><td>'+productLabel(findProduct(p.id)??p,e(p.name))+'</td><td>'+p.units+'</td><td>'+cash(p.total)+'</td></tr>').join('')||'<tr><td colspan="3">No products sold.</td></tr>');
 }
 function searchPage() {
   const rows=Object.entries(state.searches).sort((a,b)=>b[1].count-a[1].count);
-  return heading('Search insights','Searches submitted in this preview browser.')+
+  return heading('Search insights','Shared storefront searches; rate limited and excluding email-like terms.')+
     table(['Search term','Searches','No results'],rows.map(([q,n])=>'<tr><td>'+e(q)+'</td><td>'+n.count+'</td><td>'+n.misses+'</td></tr>').join('')||'<tr><td colspan="3">No searches recorded. Try the storefront search.</td></tr>');
 }
 function homepagePage() {
@@ -266,10 +266,14 @@ export function saveHomepage(values) {
   if(next.heroProductIds.length>3||next.heroProductIds.some(id=>findProduct(id)?.status!=='Published')) return 'Choose up to three published banner products.';
   state.settings.homepage=next;save();
 }
+function categorySettings(){
+ const rows=[...(state.adminCategories??[]),{id:'',name:'',sort_order:0,published:true,version:0}];
+ return '<section class="panel form-stack"><h2>Categories</h2>'+rows.map(c=>'<form data-category-editor class="form-stack" data-version="'+c.version+'"><div class="field-grid">'+field('Category ID','categoryId',c.id,'required pattern="[a-z0-9-]+" '+(c.version?'readonly':''))+field('Name','name',c.name,'required maxlength="120"')+field('Sort order','sort',c.sort_order,'type="number" required')+'</div><label class="check-label"><input name="published" type="checkbox"'+checked(c.published)+'> Published</label><button class="btn outline">'+(c.version?'Save category':'Add category')+'</button></form>').join('')+'</section>';
+}
 function settingsPage() {
   return heading('Settings','Delivery rules apply immediately to the storefront.')+
     '<form class="panel form-stack narrow" id="settings-form"><h2>Singapore delivery</h2>'+amountInput('Standard delivery charge (SGD)','shipping',state.settings.shipping)+
-    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>';
+    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>'+categorySettings();
 }
 export function adminPage(page,id,params) {
   let body;
@@ -418,7 +422,7 @@ export function parseCsv(text) {
   row.push(cell); if(row.some(Boolean)) rows.push(row);
   return rows;
 }
-export function importProducts(text) {
+export function prepareProductImport(text) {
   const [header,...rows]=parseCsv(text);
   if(!header||!rows.length) throw Error('The CSV contains no products.');
   const required=['sku','name','brand','category','variant_sku','variant_name','price','stock','min'];
@@ -452,7 +456,7 @@ export function importProducts(text) {
     if(p) Object.assign(p,product); else next.push(product);
     touched.add(variantSku);
   }
-  state.products=next; save(); return touched.size;
+  return next.filter(product=>touched.has(product.sku));
 }
 export function bulkUpdate(values) {
   const ids=values.getAll('id'), action=values.get('action'), rows=state.products.filter(p=>ids.includes(p.id));
@@ -463,4 +467,10 @@ export function bulkUpdate(values) {
     if(status) p.status=status; else p.featured=action==='Feature on homepage';
   }
   save(); return rows.length+' products updated.';
+}
+
+export function importProducts(text) {
+ const products=prepareProductImport(text);
+ for(const product of products){const old=state.products.find(p=>p.sku===product.sku);if(old)Object.assign(old,product);else state.products.push(product);}
+ save();return products.length;
 }

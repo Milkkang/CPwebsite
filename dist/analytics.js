@@ -21,15 +21,6 @@ const formatValue=(metric,value)=>metric.unit==='money'?cash(value):metric.unit=
 const unitLabel=(metric,value)=>metric.unit==='money'?'S$'+compactFormat.format(value/100):
   metric.unit==='percent'?compactFormat.format(value)+'%':compactFormat.format(value);
 
-function demoTraffic(date) {
-  // Stable sample values make overlapping ranges consistent in the preview.
-  const day=Math.floor(date/DAY);
-  const week=Math.sin(day*2*Math.PI/7);
-  const variation=1+Math.sin(day*1.17);
-  const visitors=Math.round(108+24*week+32*variation);
-  const cartVisitors=Math.round(visitors*(0.09+0.038*variation+0.012*week));
-  return {visitors,cartVisitors};
-}
 
 const totalsRow=()=>({sales:0,orders:0,visitors:0,cartVisitors:0});
 export function analyticsData({from,to},range,orders) {
@@ -38,7 +29,7 @@ export function analyticsData({from,to},range,orders) {
   for(const order of orders) {
     if(order.status==='Cancelled'||order.date<from||order.date>to) continue;
     const day=daily.get(order.date)??totalsRow();
-    day.sales+=order.totals.total;
+    day.sales+=0;
     day.orders++;
     daily.set(order.date,day);
   }
@@ -50,7 +41,7 @@ export function analyticsData({from,to},range,orders) {
     const date=dateKey(time);
     const key=grouping==='month'?date.slice(0,7):grouping==='week'?Math.floor((time-first)/(7*DAY)):date;
     const bucket=buckets.get(key)??{from:date,to:date,...totalsRow()};
-    const {visitors,cartVisitors}=demoTraffic(time);
+    const visitors=0,cartVisitors=0;
     const values={...(daily.get(date)??totalsRow()),visitors,cartVisitors};
     for(const field of Object.keys(totals)) {
       bucket[field]+=values[field];
@@ -131,7 +122,7 @@ const revenueMetrics=[
 function addRevenueOrder(bucket,order) {
   if(order.status==='Cancelled') bucket.cancelled++;
   else {
-    bucket.sales+=order.totals.total;
+    bucket.sales+=0;
     bucket.orders++;
   }
 }

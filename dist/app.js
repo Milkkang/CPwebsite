@@ -1,7 +1,8 @@
+import {productFileCsv} from './import-file.js';
 import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
 import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
-import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
+import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
 import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
 
 const app=document.getElementById('app'), toast=document.getElementById('toast'), modal=document.getElementById('dialog');
@@ -36,8 +37,11 @@ async function loadAdminProducts() {
   if(!auth.isAdmin||adminProductsLoading)return;
   adminProductsLoading=true;adminProductsError='';
   try{
-    const [result,config,orderResult,emailResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs')]);
+    const [result,config,orderResult,emailResult,searchResult,categoryResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs'),authRequest('/api/admin/search'),authRequest('/api/admin/categories')]);
     state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
+    state.adminCategories=categoryResult.categories;
+    categories.splice(0,categories.length,...categoryResult.categories.map(row=>[row.id,row.name,row.icon??'',row.color??'sage']));
+    state.searches=Object.fromEntries(searchResult.searches.map(row=>[row.term,{count:row.searches,misses:row.misses}]));
     state.settings.homepage=config.homepage?.content??{};
     homepageVersion=config.homepage?.version??0;
     state.settings.shipping=config.delivery?.shipping_cents??0;
@@ -338,7 +342,7 @@ document.addEventListener('submit', async event=>{
   if(location.hash.startsWith('#/admin')) {try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
 
   let error;
-  switch(form.id) {
+  switch(form.dataset.categoryEditor!==undefined?'category-editor':form.id) {
     case 'search-form': {
       const q=f.q.trim();
       navigate(q?'/search':'/shop',q?{q}:{});
@@ -390,6 +394,10 @@ document.addEventListener('submit', async event=>{
         adminProductsLoaded=false;await loadAdminProducts();message(shipItem?'Item shipped.':'Fulfilment saved.');}
       catch(problem){error=problem.message;}break;
     }
+    case 'category-editor':
+      try{await authRequest('/api/admin/categories',{id:String(data.get('categoryId')??''),name:String(data.get('name')??''),sort:Number(data.get('sort')),published:data.has('published'),version:Number(form.dataset.version)});
+       adminProductsLoaded=false;await loadAdminProducts();storefront={key:'',data:null,error:null};message('Category saved.');}
+      catch(problem){error=problem.message;}break;
     case 'coupon-editor':
       try{const code=String(data.get('code')??'').trim().toUpperCase(),kind=String(data.get('type')??''),number=Number(data.get('amount'));
         const amount=kind==='fixed'?cents(data.get('amount')):kind==='percent'?number:0,minimum=cents(data.get('min'));
@@ -468,9 +476,11 @@ document.addEventListener('click', async event=>{
     catch(error){button.disabled=false;message(error.message);}return;
   }
   else if('receiveOrder' in data) {
-    const error=confirmBuyerReceipt(data.receiveOrder);
-    if(error) message(error);
-    else {navigate('/orders',{view:'receive',stage:'delivered'});message('Order received. You can rate it in To Rate.');}
+    const order=state.orders.find(row=>row.id===data.receiveOrder);
+    if(!order?.backendId)return;
+    button.disabled=true;
+    try{await authRequest('/api/orders/receipt',{orderId:order.backendId,version:order.version});await loadOrders();navigate('/orders',{view:'receive',stage:'delivered'});message('Receipt confirmed.');}
+    catch(error){button.disabled=false;message(error.message);}
   } else if('rateOrder' in data) {
     const item=reviewItem(data.rateOrder,data.rateSku);
     if(item) showModal(buyerReviewDialog(data.rateOrder,item));
@@ -490,6 +500,14 @@ document.addEventListener('click', async event=>{
   else if('stock' in data) {
     const row=getVariant(data.stock);
     if(row) showModal(stockEditor(data.stock,row.variant,row.product));
+  } else if('orderAction' in data) {
+    const order=state.orders.find(row=>row.id===data.orderId);
+    if(!order?.backendId)return;
+    const restock=Boolean(document.getElementById('refund-restock')?.checked);
+    if(!window.confirm(data.orderAction==='refund'?'Refund this TEST payment and close the order'+(restock?' with stock returned?':' without returning stock?'):'Cancel this unpaid TEST order?'))return;
+    button.disabled=true;
+    try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});adminProductsLoaded=false;await loadAdminProducts();message('Test order operation completed.');}
+    catch(error){message(error.message);button.disabled=false;}
   } else if('editCoupon' in data) showModal(couponEditor(data.editCoupon));
   else if(data.export==='revenue') {
     exportRevenueReport(route().params);
@@ -499,8 +517,13 @@ document.addEventListener('click', async event=>{
   else if('confirmReset' in data) {reset();modal.close();render();message('Preview reset.');}
   else if('confirmImport' in data) {
     try {
-      const count=importProducts(csvToImport);modal.close();render();message(count+' products imported.');
-    } catch(error) {modal.close();message(error.message);}
+      const products=prepareProductImport(csvToImport);
+      const rows=products.map(p=>({sku:p.sku,version:state.products.find(old=>old.sku===p.sku)?.version??0,stock:p.variants[0].stock,
+       fields:{name:p.name,variant_name:p.variants[0].name,brand:p.brand,category_id:p.category,description:p.description,keywords:p.keywords,status:p.status,featured:p.featured,image_url:p.image,original_image_url:p.original,r2_image_url:p.r2,price_cents:p.variants[0].price,min_quantity:p.variants[0].min}}));
+      button.disabled=true;
+      const result=await authRequest('/api/admin/import',{rows});
+      modal.close();adminProductsLoaded=false;await loadAdminProducts();message(result.count+' products imported.');
+    } catch(error) {button.disabled=false;message(error.message);}
     csvToImport=undefined;
   } else if('close' in data) {csvToImport=undefined;modal.close();}
 });
@@ -544,9 +567,9 @@ document.addEventListener('change',async event=>{
     input.value='';
     if(file.size>2*1024*1024) {message('Use a CSV below 2 MB.');return;}
     try {
-      csvToImport=await file.text();
-      showModal('<div class="form-stack"><h2 id="dialog-title">Import products?</h2><p>'+e(file.name)+' will add products or update matching SKUs.</p><button type="button" class="btn primary" data-confirm-import>Import CSV</button></div>');
-    } catch {message('The CSV could not be read.');}
+      csvToImport=await productFileCsv(file);
+      showModal('<div class="form-stack"><h2 id="dialog-title">Import products?</h2><p>'+e(file.name)+' will add products or update matching SKUs.</p><button type="button" class="btn primary" data-confirm-import>Import products</button></div>');
+    } catch(error) {message(error.message||'The file could not be read.');}
   }
 });
 document.addEventListener('visibilitychange',()=>{

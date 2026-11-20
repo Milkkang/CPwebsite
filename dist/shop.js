@@ -51,7 +51,7 @@ export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="it
 const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
 export function shopFrame(body, query='') {
   const items=Object.values(state.cart).reduce((a,b)=>a+b,0);
-  return '<div class="topline"><span>CP VALUE MART</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
+  return '<div class="test-payment-banner" role="status">TEST PAYMENTS ONLY · Browsing is open. Checkout is restricted to approved testers. No real orders or charges.</div><div class="topline"><span>CP VALUE MART</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
     '<header class="shop-head"><div class="wrap head-inner">'+logo()+
     '<form class="search" id="search-form">'+icon('search')+'<input name="q" aria-label="Search products" type="search" placeholder="Search products, brands or SKU" value="'+e(query)+'" maxlength="100"><button>Search</button></form>'+
     '<nav class="top-actions" aria-label="Account and shopping"><a class="header-saved" href="#/saved" title="Saved Items" aria-label="Saved Items">'+icon('heart')+'<span aria-hidden="true">Saved Items</span></a><a href="#/account" title="My account" aria-label="My account">'+icon('user')+'</a><a class="bag-link" href="#/cart" aria-label="Basket, '+items+' items">'+icon('bag')+'<span>Basket</span><b>'+items+'</b></a></nav></div>'+
@@ -320,11 +320,11 @@ export function orderDisplay(o,{buyerTracking=false}={}) {
   const tracking=o.tracking||(buyerTracking&&o.status!=='Processing'?'Not available':'Awaiting shipment');
   return '<div class="panel order-display"><div class="section-title"><div><h2>'+e(o.id)+'</h2><p class="subtle">'+e(o.date)+'</p></div>'+badge(o.status,buyerTracking&&o.status==='Delivered'?'Received':stage?.label)+'</div>'+
     (o.status==='Cancelled'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
-    '<p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
+    '<p class="subtle">TEST ORDER · No real payment or revenue. Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
 }
 export function confirmation(params) {
   const session=params.get('session_id');
-  if(session)return crumb('Test payment')+'<div class="page-title"><h1>Test payment received</h1><p>Stripe is confirming the sandbox payment. Your order history updates after the signed webhook is processed.</p></div><div class="button-row">'+go('/orders','View Purchase History','btn primary')+go('/shop','Continue shopping','btn outline')+'</div>';
+  if(session)return crumb('Test payment')+'<div class="page-title"><h1>Checking test payment</h1><p>Stripe is confirming the sandbox payment. Your order history updates after the signed webhook is processed.</p></div><div class="button-row">'+go('/orders','View Purchase History','btn primary')+go('/shop','Continue shopping','btn outline')+'</div>';
   const id=(params.get('id')??'').trim().toUpperCase();
   const order=buyerOrders().find(o=>o.id===id);
   return crumb('Order confirmed')+(order?

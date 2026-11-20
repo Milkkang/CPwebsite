@@ -1,93 +1,60 @@
-# CP Value Mart · Soft Grocery Preview
+# CP Value Mart
 
-Source export of the existing CP Value Mart Sites design preview, including the storefront, admin dashboard and product images.
+CP Value Mart 新加坡杂货商城，含会员商店与管理员后台。开发规则见 [AGENTS.md](AGENTS.md)。
 
-## Run locally
+## 技术架构
 
-Serve the `dist/` directory with a static HTTP server, for example:
+- `dist/`：原生 JavaScript 前端与静态资源（现有实现不是 React）。
+- `src/`：Cloudflare Worker，同域 `/api/*`；`cloudflare.config.ts` 使用 cf CLI。
+- Supabase：正式业务数据、Auth、RLS 与受控服务端 RPC。
+- Cloudflare R2：商品图片；保留现有 URL。
+- Stripe：仅 sandbox/test 支付；Resend：认证邮件及 Phase 6 交易邮件。
 
-```sh
-python3 -m http.server 8080 --directory dist
-```
+此目录源自 Sites 设计导出，`.openai/hosting.json` 仅保留原始配置。静态 HTTP server 只能预览资源，不能替代 Worker/API 本地开发。
 
-Then open http://localhost:8080. No build or dependency installation is required.
+## 本地开发和验证
 
-## Preview data
-
-This is an interactive design prototype. Product prices, stock, orders and sign-in are simulated; browser-local changes are stored in localStorage. There is no production database, live payment processing or real order service connected.
-
-## Source
-
-Exported from Sites project `appgprj_6afbc995114c8191b7d0d5fe9a8e7629` at commit `1836d4c7f1cd493c4a1932d07ab4cba3665e9b9e`.
-
-The `.openai/hosting.json` file records the original Sites project configuration. Uploading this source does not enable GitHub Pages or redeploy the original site.
-
-## Product editing
-
-In Admin → Products, edit a variant name, price or MOQ and leave the field to save. Status changes save immediately. These edits remain in the same browser after refresh.
-
-The product editor keeps the R2 image URL in Product information. Changing it replaces an unchanged variant image; an explicitly changed variant image takes precedence. New products start with no variants; use Add variant before saving.
-
-Run the product editing regression checks with Node.js:
+Node 版本：22.23+（22.x）、24.22+（24.x）或 26.12+（26.x）；依赖以 lockfile 为准。
 
 ```sh
-node tests/product-editing.mjs
+npm ci                 # 首次准备或依赖变化时
+npm run dev            # Worker 和前端
+npm test               # 语法、API/UI 回归及商品编辑检查
+npm run build          # 打包并核对静态资源字节、Worker 配置
+npm run test:runtime   # 构建后执行真实 Worker runtime 检查
 ```
 
-## Phase 1 backend and deployment
+按 [分级验证规则](AGENTS.md) 选检查，不为纯文档运行整套应用测试。定向测试示例：`node --test tests/catalog-api.test.mjs`；商品编辑：`node tests/product-editing.mjs`。
 
-Install with `npm ci` using Node 22.23+ (22.x), 24.22+ (24.x), or 26.12+ (26.x).
-`npm test` runs API and storefront regression checks. `npm run build` packages the
-Worker and verifies that every existing storefront asset is copied byte for byte.
-`npm run dev` runs the Worker and storefront locally.
+`npm run data:prepare` 会重新生成初始 seed/report，并非日常验证或数据库备份；仅在目录导入任务中使用。迁移、数据权限和恢复边界见对应验收记录。
 
-Cloudflare Builds deploys `main` to the existing `cpwebsite` Worker. Build command:
-`npm test && npm run build`; deploy command: `npm run deploy` (uses verified prebuilt output).
-GitHub pull requests run the same checks before merge. Configuration is in
-`cloudflare.config.ts`; the front end remains vanilla JavaScript in `dist/`.
+## 环境配置（仅名称）
 
-`GET /api/health` is a liveness check, not a database/payment readiness check.
-Phase 2 adds read-only product, category and public configuration APIs; unknown API routes return JSON 404. Business data still uses the
-existing browser-local preview implementation until later phases.
+| 名称 | 用途与范围 |
+| --- | --- |
+| `SUPABASE_URL` | 非敏感项目配置 |
+| `SUPABASE_PUBLISHABLE_KEY` | 公开目录访问的运行时绑定 |
+| `SUPABASE_SECRET_KEY` | 仅服务端 Auth 与受控业务操作 |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Phase 5 测试支付与 webhook |
+| `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | Phase 6 发信与事件验签 |
+| `TRANSACTIONAL_EMAIL_TEST_RECIPIENTS` | 受保护测试收件人 allowlist |
+| `TRANSACTIONAL_EMAIL_FROM`, `TRANSACTIONAL_EMAIL_REPLY_TO` | 交易邮件发件人与回复地址 |
 
-Configure runtime secrets in Cloudflare Worker Settings → Variables and Secrets,
-never Builds variables. Do not commit `.env`, `.dev.vars`, secret values, tokens,
-or database exports. No service secret is needed for this phase's liveness API.
-See `docs/phase-1-acceptance.md` for validation, limitations and recovery.
+以上名称由当前 `cloudflare.config.ts` 确认；代码存在绑定不表示生产配置或验收已完成。`ASSETS` 为静态资源绑定。凭据仅存平台运行时受保护配置，不提交值，不放 Builds 或浏览器；不要从生产导出 Secret 用于本地开发。
 
-## Phase 2 database catalog
+## CI 和部署
 
-Production database: Supabase cpvaluemart-production (Singapore). The storefront
-still uses its original preview data until Phase 4. No buyer/admin writes are
-accepted by the new API. Read endpoints: `/api/products`, `/api/products/:sku`,
-`/api/categories`, `/api/config`. Catalog accepts `q`, `category`, `brand`,
-`sort=featured|price-up|price-down|name`, `size=30|50|100` and positive `page`.
+[GitHub Actions](.github/workflows/checks.yml) 在 main、`phase-*/**`、`dev/**` 和既有开发分支的代码 push 及 PR 上执行 `npm ci`、test、build、runtime；该工作流没有部署步骤；纯 Markdown/docs push 跳过应用 CI。
 
-`npm run data:prepare` regenerates the checked, idempotent initial seed and report.
-Apply the tracked migration before the seed; `supabase/phase-2-verification.sql`
-checks production constraints/RLS inside a rolled-back transaction. The browser
-export and read-only difference tool are in `scripts/migration/`. See
-`docs/phase-2-acceptance.md` for import boundaries, acceptance and recovery.
+Cloudflare Builds 的 main 连接可自动部署既有 `cpwebsite` Worker。历史记录的构建命令为 `npm test && npm run build && npm run test:runtime`，发布为 `npm run deploy`（预构建产物）。发布前须核验平台当前触发条件和路径过滤，不能把历史 docs 跳过发布记录当作现行保证。
 
-## Phase 3 accounts
+已授权的非破坏性发布在确认目标、检查和回滚路径后执行；高风险操作见 AGENTS。Preview 按需使用现有 `npm run preview`，不新增 Wrangler 配置。`GET /api/health` 仅证明存活，不能证明数据库、邮件、支付或验收已完成。
 
-Email/password accounts are handled by Supabase Auth through the same-domain API.
-Runtime `SUPABASE_SECRET_KEY` is required; never add it to Builds or the browser.
-The browser receives an opaque HttpOnly session cookie, not Supabase tokens. Sessions
-last at most one hour; expiry requires sign-in again. Profile/address ownership and
-administrator access are checked on the server. TokenHash callbacks are served at
-`/auth/confirm` and `/auth/reset`; GET does not consume a link.
+## 文档索引
 
-Old browser-local identities are ignored. Shared product editing remains Phase 4;
-the simulated order submission is disabled until the real test checkout is ready.
-See `docs/phase-3-acceptance.md` for configuration, tests and remaining real-mail checks.
-
-## Phase 4 shared storefront
-
-Authenticated carts, saved items and recently viewed products are shared through the same-domain API. Admin product, homepage, delivery and coupon writes use server-verified roles and optimistic versions. See `docs/phase-4-acceptance.md`.
-
-## Phase 5 Stripe test checkout
-
-Checkout remains test-only. The Worker accepts only a `sk_test_` runtime key, recalculates orders from the member cart and saved address, and redirects to a Stripe-hosted test Checkout Session. A signed, idempotent webhook commits stock and payment state; browser totals and success redirects never mark an order paid. Stripe secrets belong only in Cloudflare Runtime Secrets. No live key, real card or real revenue is supported.
-
-Phase 5 is approved. Guest baskets are disabled, authenticated basket state is loaded from the database without replaying browser quantities, and the production sandbox payment, cart clearing and single inventory movement were verified. See `docs/phase-5-acceptance.md`.
+- [当前状态](docs/STATUS.md)：唯一维护的当前进度入口。
+- [运行、导入与恢复](docs/operations.md)：测试、Preview、生产发布、回滚与测试付款恢复。
+- [协作流程](docs/github-development-workflow.md)：Git、分支、PR 与部署操作参考。
+- [最终验收证据](docs/final-acceptance.md)：实际测试、生产 QA、清理及验证边界。
+- [本次规则审计](docs/workflow-audit.md)：生效范围、历史冲突及验证范围。
+- 验收原始证据：[Phase 0](docs/phase-0-readiness.md)、[Phase 1](docs/phase-1-acceptance.md)、[Phase 2](docs/phase-2-acceptance.md)、[Phase 3](docs/phase-3-acceptance.md)、[Phase 4](docs/phase-4-acceptance.md)。后续阶段的固定版本证据见 STATUS。

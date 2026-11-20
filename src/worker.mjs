@@ -1,4 +1,4 @@
-import { authRoute, handleAuth } from './auth-api.mjs';
+import { authRoute, handleAuth, db, hash } from './auth-api.mjs';
 import { ApiError, catalogRoute, readCatalog } from './catalog-api.mjs';
 import { commerceRoute, handleCommerce } from './commerce-api.mjs';
 import { emailRoute, handleEmail, processEmailJobs } from './email-api.mjs';
@@ -32,7 +32,7 @@ export default {
     try {
       if (pathname === '/api/health') {
         response = ['GET', 'HEAD'].includes(request.method)
-          ? json({ ok: true, service: 'cpvaluemart-api', phase: 6 }, 200, requestId)
+          ? json({ ok: true, service: 'cpvaluemart-api', phase: 8 }, 200, requestId)
           : json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } }, 405, requestId, { Allow: 'GET, HEAD' });
       } else if (route === 'email-api') {
         const result=await handleEmail(request,env);
@@ -46,7 +46,15 @@ export default {
         const result=await handleAuth(request,env);
         response=json(result.data,result.status,requestId,result.headers);
       } else if (route) {
-        response = json(await readCatalog(request, env, route), 200, requestId);
+        const result=await readCatalog(request, env, route);
+        response = json(result, 200, requestId);
+        const params=new URL(request.url).searchParams;
+        if(route==='products'&&request.method==='GET'&&params.get('q')&&(!params.has('page')||params.get('page')==='1')){
+          const record=(async()=>{const key=await hash(env.SUPABASE_SECRET_KEY+'|search|'+(request.headers.get('CF-Connecting-IP')??'unknown'));
+            await db(env,'rpc/record_catalog_search',{method:'POST',body:{p_term:params.get('q'),p_results:result.pagination?.total??result.products?.length??0,p_key:key}});
+          })().catch(()=>{});
+          if(ctx?.waitUntil)ctx.waitUntil(record);else await record;
+        }
       } else {
         response = json({ error: { code: 'NOT_FOUND', message: 'API endpoint not found.' } }, 404, requestId);
       }

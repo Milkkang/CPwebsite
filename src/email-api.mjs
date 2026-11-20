@@ -1,5 +1,5 @@
 import { ApiError } from './catalog-api.mjs';
-import { isAllowedOrigin, bodyJSON, db, identity } from './auth-api.mjs';
+import { isAllowedOrigin, bodyJSON, bodyText, db, identity } from './auth-api.mjs';
 
 const encoder=new TextEncoder();
 const safeId=value=>typeof value==='string'&&/^[a-f0-9-]{36}$/.test(value);
@@ -67,7 +67,7 @@ async function verify(request,env,raw){
 async function webhook(request,env){
  if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
  if(!(request.headers.get('Content-Type')??'').startsWith('application/json'))throw new ApiError(400,'INVALID_WEBHOOK','Invalid webhook.');
- const raw=await request.text();if(raw.length>262144)throw new ApiError(413,'REQUEST_TOO_LARGE','Webhook is too large.');
+ const raw=await bodyText(request,262144);
  const eventId=await verify(request,env,raw);let event;try{event=JSON.parse(raw);}catch{throw new ApiError(400,'INVALID_WEBHOOK','Invalid webhook.');}
  if(!types.has(event?.type))return {status:200,data:{received:true,ignored:true}};
  const message=event.data?.email_id;if(typeof message!=='string'||message.length>200)throw new ApiError(400,'INVALID_WEBHOOK','Invalid webhook.');

@@ -37,13 +37,18 @@ async function upstream(env,path,{method='GET',body,token,service=false,allowFai
  return {ok:response.ok,status:response.status,data};
 }
 export const db=(env,path,options={})=>upstream(env,'/rest/v1/'+path,{...options,service:true});
-export async function bodyJSON(request) {
- if(!(request.headers.get('Content-Type')??'').startsWith('application/json'))bad();
+export async function bodyText(request,maxBytes=8192) {
  const reader=request.body?.getReader();if(!reader)bad();let length=0,chunks=[];
- while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>8192){await reader.cancel();throw new ApiError(413,'REQUEST_TOO_LARGE','Form is too large.');}chunks.push(value);}
+ while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>maxBytes){await reader.cancel();throw new ApiError(413,'REQUEST_TOO_LARGE','Request is too large.');}chunks.push(value);}
  const bytes=new Uint8Array(length);let offset=0;for(const c of chunks){bytes.set(c,offset);offset+=c.length;}
- try {const value=JSON.parse(new TextDecoder().decode(bytes));if(!value||Array.isArray(value)||typeof value!=='object')bad();return value;}catch{bad();}
+ return new TextDecoder().decode(bytes);
 }
+export async function bodyJSON(request,maxBytes=8192) {
+ if(!(request.headers.get('Content-Type')??'').startsWith('application/json'))bad();
+ const text=await bodyText(request,maxBytes);
+ try {const value=JSON.parse(text);if(!value||Array.isArray(value)||typeof value!=='object')bad();return value;}catch{bad();}
+}
+
 function field(data,key,min,max) {const value=data[key];if(typeof value!=='string'||value.length<min||value.length>max||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value))bad();return value;}
 function email(data) {const value=field(data,'email',3,254).trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))bad('Enter a valid email address.');return value;}
 function password(data){return field(data,'password',12,128);}
@@ -113,6 +118,27 @@ export async function handleAuth(request,env) {
  if(path==='/api/admin'||path.startsWith('/api/admin/')){
   if(!who.isAdmin)throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
   if(path==='/api/admin/access'&&read)return result(publicIdentity(who));
+  if(path==='/api/admin/search'&&read){
+   const rows=await db(env,'catalog_search_counts?select=term,searches,misses&order=searches.desc&limit=100');
+   return result({searches:rows.data});
+  }
+  if(path==='/api/admin/categories'){
+   if(read){const rows=await db(env,'categories?select=id,name,icon,color,published,sort_order,version&order=sort_order.asc,id.asc');return result({categories:rows.data});}
+   const data=await bodyJSON(request);
+   if(typeof data.id!=='string'||! /^[a-z0-9-]{1,80}$/.test(data.id)||typeof data.name!=='string'||!data.name.trim()||data.name.length>120||typeof data.published!=='boolean'||!Number.isSafeInteger(data.sort)||!Number.isSafeInteger(data.version)||data.version<0)bad();
+   const body={id:data.id,name:data.name.trim(),published:data.published,sort_order:data.sort};
+   const r=data.version===0?await db(env,'categories',{method:'POST',body,allowFailure:true}):await db(env,'categories?'+new URLSearchParams({id:'eq.'+data.id,version:'eq.'+data.version}),{method:'PATCH',body,allowFailure:true});
+   if(!r.ok||!r.data?.length)throw new ApiError(409,'VERSION_CONFLICT','Category changed or the ID already exists. Reload before saving.');
+   return result({category:r.data[0]});
+  }
+  if(path==='/api/admin/import'){
+   if(read)throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
+   const data=await bodyJSON(request,2*1024*1024);
+   if(!Array.isArray(data.rows)||data.rows.length<1||data.rows.length>1000||data.rows.some(row=>!row||typeof row.sku!=='string'||! /^[A-Za-z0-9_-]{1,100}$/.test(row.sku)||!Number.isSafeInteger(row.version)||row.version<0||!Number.isSafeInteger(row.stock)||row.stock<0||row.stock>1000000||!row.fields||Array.isArray(row.fields)||typeof row.fields!=='object'||Object.keys(row.fields).some(key=>!['name','variant_name','brand','category_id','description','keywords','status','featured','image_url','original_image_url','r2_image_url','price_cents','min_quantity'].includes(key))))bad();
+   const r=await db(env,'rpc/admin_import_products',{method:'POST',body:{p_actor:who.account.id,p_rows:data.rows},allowFailure:true});
+   if(!r.ok)throw new ApiError(r.data?.code==='40001'?409:400,'IMPORT_REJECTED','Import rejected. No rows were changed. Reload products and check the file.');
+   return result({count:r.data});
+  }
   if(path==='/api/admin/products'){
    if(read){const rows=await db(env,'products?select=id,sku,name,variant_name,brand,category_id,description,keywords,status,featured,image_url,original_image_url,r2_image_url,price_cents,stock,reserved_quantity,available_quantity,min_quantity,version&order=id.asc&limit=1000');return result({products:rows.data});}
    const data=await bodyJSON(request);

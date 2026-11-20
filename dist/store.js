@@ -151,7 +151,7 @@ export function updateOrder(order,status,tracking,now=Date.now()) {
 export function syncAutoReceipts(now=Date.now()) {
   let changed=false, nextDue=Infinity;
   for(const order of state.orders) {
-    if(order.status!=='Shipped') continue;
+    if(order.backendId||order.status!=='Shipped') continue;
     if(!Number.isFinite(order.shippedAt)) {
       order.shippedAt=now;
       changed=true;

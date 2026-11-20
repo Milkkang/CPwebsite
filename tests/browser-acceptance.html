@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Isolated CP acceptance</title><h1>Isolated browser acceptance</h1><p>No production data or credentials are used.</p><ol id="results"></ol><script type="module">
+import {productFileCsv} from '/import-file.js';
+const results=document.getElementById('results');
+for(const name of ['valid','formula']){
+ const li=document.createElement('li');results.append(li);
+ try{
+  const bytes=await (await fetch('/fixtures/import-'+name+'.xlsx')).arrayBuffer();
+  const csv=await productFileCsv(new File([bytes],'products.xlsx'));
+  if(name==='formula'||!csv.includes('QA-IMPORT')||!csv.includes('2.50'))throw Error('unexpected parser result');
+  li.textContent='PASS: XLSX compressed inline-string sheet preserves SKU, price and columns';
+ }catch(error){li.textContent=name==='formula'&&error.message.includes('Formulas are not accepted')?'PASS: Excel formulas are rejected before import':'FAIL: '+error.message;}
+}
+</script></html>

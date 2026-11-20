@@ -1,7 +1,8 @@
 name: Phase checks
 on:
   push:
-    branches: [main, 'phase-*/**']
+    branches: [main, 'phase-*/**', 'dev/**', 'docs/workflow-optimization']
+    paths-ignore: ['docs/**', '**/*.md']
   pull_request:
 permissions:
   contents: read
