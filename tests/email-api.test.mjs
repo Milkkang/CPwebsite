@@ -14,6 +14,7 @@ test('email worker sends only an allowlisted test recipient with a stable idempo
   recipient:'acceptance@example.invalid',payload:{orderNumber:'CVM-1004',total:1340,currency:'sgd'},is_test:true,idempotency_key:'order_confirmation/stripe/evt_test',attempt_count:1};
  let sent,finished;
  await mocked(async(url,options)=>{
+  if(String(url).includes('reconcile_email_confirmations'))return Response.json(0);
   if(String(url).includes('claim_email_jobs'))return Response.json([job]);
   if(String(url)==='https://api.resend.com/emails'){sent={headers:options.headers,body:JSON.parse(options.body)};return Response.json({id:'email_test_1'});}
   if(String(url).includes('finish_email_attempt')){finished=JSON.parse(options.body);return Response.json(true);}
@@ -27,11 +28,43 @@ test('email worker fails closed before Resend when the test recipient is not all
  const job={id:'11111111-1111-4111-8111-111111111111',kind:'shipment',recipient:'other@example.invalid',payload:{orderNumber:'CVM-1004',tracking:'TEST'},
   is_test:true,idempotency_key:'shipment/order/version',attempt_count:1};let finished;
  await mocked(async(url,options)=>{
+  if(String(url).includes('reconcile_email_confirmations'))return Response.json(0);
   if(String(url).includes('claim_email_jobs'))return Response.json([job]);
   if(String(url).includes('finish_email_attempt')){finished=JSON.parse(options.body);return Response.json(true);}
   throw Error('Unexpected network request '+url);
  },async()=>await processEmailJobs(env));
  assert.equal(finished.p_success,false);assert.equal(finished.p_retryable,false);assert.equal(finished.p_error,'RECIPIENT_NOT_ALLOWED');
+});
+
+test('outbox reconciliation failure does not stop existing due email jobs',async()=>{
+ let claimed=false;const originalError=console.error;console.error=()=>{};
+ try{
+  await mocked(async(url)=>{
+   if(String(url).includes('reconcile_email_confirmations'))return Response.json({message:'Unavailable'},{status:503});
+   if(String(url).includes('claim_email_jobs')){claimed=true;return Response.json([]);}
+   throw Error('Unexpected request '+url);
+  },async()=>assert.deepEqual(await processEmailJobs(env),{processed:0,configured:true}));
+ }finally{console.error=originalError;}
+ assert.equal(claimed,true);
+});
+
+test('cancellation and sandbox refund templates stay labelled and allowlisted',async()=>{
+ const jobs=['cancellation','test_refund'].map((kind,index)=>({id:`11111111-1111-4111-8111-11111111111${index}`,kind,
+  recipient:'acceptance@example.invalid',payload:{orderNumber:'CVM-1004',total:1340},is_test:true,
+  idempotency_key:`${kind}/acceptance`,attempt_count:1}));
+ const sent=[];
+ await mocked(async(url,options)=>{
+  if(String(url).includes('reconcile_email_confirmations'))return Response.json(0);
+  if(String(url).includes('claim_email_jobs'))return Response.json(jobs);
+  if(String(url)==='https://api.resend.com/emails'){
+   sent.push(JSON.parse(options.body));return Response.json({id:`email_test_${sent.length}`});
+  }
+  if(String(url).includes('finish_email_attempt'))return Response.json(true);
+  throw Error('Unexpected request '+url);
+ },async()=>assert.deepEqual(await processEmailJobs(env),{processed:2,configured:true}));
+ assert.equal(sent.length,2);
+ for(const message of sent){assert.deepEqual(message.to,['acceptance@example.invalid']);assert.match(message.subject,/^\[TEST ORDER\]/);assert.match(message.text,/No real payment or revenue/);}
+ assert.match(sent[0].subject,/cancelled/);assert.match(sent[1].subject,/refund/);
 });
 
 async function signedWebhook(event,id='msg_test_1'){

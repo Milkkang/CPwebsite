@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+PG_BIN=${PG_BIN:-$(dirname "$(command -v pg_ctl)")}
+for command in initdb pg_ctl createdb psql; do
+  test -x "$PG_BIN/$command" || { echo "PostgreSQL binary missing: $command" >&2; exit 1; }
+done
+PG_TEST_DIR=$(mktemp -d /tmp/cpwebsite-phase6-test.XXXXXX)
+cleanup() {
+  "$PG_BIN/pg_ctl" -D "$PG_TEST_DIR/data" stop -m immediate >/dev/null 2>&1 || true
+  rm -rf "$PG_TEST_DIR"
+}
+trap cleanup EXIT
+"$PG_BIN/initdb" -D "$PG_TEST_DIR/data" -A trust --no-instructions >/dev/null
+"$PG_BIN/pg_ctl" -D "$PG_TEST_DIR/data" -o "-F -c listen_addresses='' -k $PG_TEST_DIR" -l "$PG_TEST_DIR/postgres.log" start >/dev/null
+PG_PORT=5432
+"$PG_BIN/createdb" -h "$PG_TEST_DIR" -p "$PG_PORT" cpwebsite_phase6
+PSQL=("$PG_BIN/psql" -h "$PG_TEST_DIR" -p "$PG_PORT" -d cpwebsite_phase6 -v ON_ERROR_STOP=1 -q)
+"${PSQL[@]}" -f tests/phase6-postgres-bootstrap.sql >/dev/null
+for migration in supabase/migrations/*.sql; do "${PSQL[@]}" -f "$migration" >/dev/null; done
+"${PSQL[@]}" -f tests/phase6-database-acceptance.sql >/dev/null
+"${PSQL[@]}" -f tests/phase6-concurrency-fixture.sql >/dev/null
+CONCURRENT_ORDER=$("${PSQL[@]}" -Atc "insert into public.orders(user_id,address_id,subtotal_cents,shipping_cents,discount_cents,total_cents,stripe_checkout_session_id) select a.user_id,a.id,1000,0,0,1000,'cs_test_phase6_concurrent' from public.buyer_addresses a limit 1 returning id")
+"${PSQL[@]}" -c "insert into public.order_items(order_id,sku,product_name,variant_name,unit_cents,quantity) values('$CONCURRENT_ORDER','TEST-1','Acceptance Item','One',1000,1)" >/dev/null
+PAYMENT_SQL="select public.apply_test_payment_event('evt_phase6_concurrent','checkout.session.completed',false,'$CONCURRENT_ORDER','cs_test_phase6_concurrent','pi_test_phase6_concurrent',1000,'sgd');"
+"${PSQL[@]}" -Atc "$PAYMENT_SQL" > "$PG_TEST_DIR/payment-1.txt" &
+first_pid=$!
+"${PSQL[@]}" -Atc "$PAYMENT_SQL" > "$PG_TEST_DIR/payment-2.txt" &
+second_pid=$!
+wait "$first_pid"
+wait "$second_pid"
+rg -q '"outcome": "paid"' "$PG_TEST_DIR/payment-1.txt" "$PG_TEST_DIR/payment-2.txt"
+rg -q '"duplicate": true' "$PG_TEST_DIR/payment-1.txt" "$PG_TEST_DIR/payment-2.txt"
+test "$("${PSQL[@]}" -Atc "select count(*) from public.inventory_movements where source_key like 'stripe:evt_phase6_concurrent:%'")" = 1
+test "$("${PSQL[@]}" -Atc "select count(*) from public.email_jobs where idempotency_key='order_confirmation/stripe/evt_phase6_concurrent'")" = 1
+echo 'PASS: Phase 6 isolated PostgreSQL acceptance'

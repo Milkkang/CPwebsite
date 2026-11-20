@@ -41,6 +41,7 @@ async function send(job,env){
 }
 export async function processEmailJobs(env){
  if(!configReady(env))return {processed:0,configured:false};
+ try{await db(env,'rpc/reconcile_email_confirmations',{method:'POST',body:{p_limit:25}});}catch{console.error('EMAIL_OUTBOX_RECONCILE_FAILED');}
  const claimed=await db(env,'rpc/claim_email_jobs',{method:'POST',body:{p_limit:10}}),jobs=Array.isArray(claimed.data)?claimed.data:[];
  for(const job of jobs){
   let result;try{result=await send(job,env);}catch{result={success:false,retryable:false,error:'EMAIL_TEMPLATE_ERROR'};}
