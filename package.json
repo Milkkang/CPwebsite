@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node scripts/check-syntax.mjs && node --test tests/worker.test.mjs tests/catalog-api.test.mjs tests/catalog-client.test.mjs tests/import.test.mjs tests/auth-api.test.mjs tests/auth-ui.test.mjs tests/commerce-api.test.mjs tests/checkout-ui.test.mjs tests/email-api.test.mjs tests/order-operations.test.mjs tests/import-file.test.mjs tests/release-safety.test.mjs tests/admin-lists.test.mjs && node tests/product-editing.mjs",
+    "test": "node scripts/check-syntax.mjs && node --test tests/worker.test.mjs tests/catalog-api.test.mjs tests/catalog-client.test.mjs tests/import.test.mjs tests/auth-api.test.mjs tests/auth-ui.test.mjs tests/commerce-api.test.mjs tests/checkout-ui.test.mjs tests/email-api.test.mjs tests/order-operations.test.mjs tests/import-file.test.mjs tests/release-safety.test.mjs tests/admin-lists.test.mjs tests/traffic-api.test.mjs && node tests/product-editing.mjs",
     "build": "cf build && node scripts/check-build.mjs",
     "dev": "cf dev",
     "preview": "cf previews deploy",

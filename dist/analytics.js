@@ -5,9 +5,9 @@ const metrics=[
   {key:'sales',label:'Sales',unit:'money',value:row=>row.sales},
   {key:'orders',label:'Orders',unit:'count',value:row=>row.orders},
   {key:'sales-per-order',label:'Sales per order',unit:'money',value:row=>row.orders?row.sales/row.orders:0},
-  {key:'visitors',label:'Visitors',unit:'count',value:row=>row.visitors},
-  {key:'cart-visitors',label:'Add-to-cart visitors',unit:'count',value:row=>row.cartVisitors},
-  {key:'cart-rate',label:'Add-to-cart rate',unit:'percent',value:row=>row.visitors?100*row.cartVisitors/row.visitors:0}
+  {key:'visitors',label:'Visitor sessions',unit:'count',value:row=>row.visitors},
+  {key:'cart-visitors',label:'Add-to-cart sessions',unit:'count',value:row=>row.cartVisitors},
+  {key:'cart-rate',label:'Add-to-cart session rate',unit:'percent',value:row=>row.visitors?100*row.cartVisitors/row.visitors:0}
 ];
 const DAY=86_400_000;
 const parseDate=key=>new Date(key+'T00:00:00Z');
@@ -23,7 +23,7 @@ const unitLabel=(metric,value)=>metric.unit==='money'?'S$'+compactFormat.format(
 
 
 const totalsRow=()=>({sales:0,orders:0,visitors:0,cartVisitors:0});
-export function analyticsData({from,to},range,orders) {
+export function analyticsData({from,to},range,orders,traffic=[]) {
   const totals=totalsRow();
   const daily=new Map();
   for(const order of orders) {
@@ -34,6 +34,7 @@ export function analyticsData({from,to},range,orders) {
     daily.set(order.date,day);
   }
 
+  const visits=new Map(traffic.map(row=>[row.day,row]));
   const grouping=range==='1y'?'month':range==='3m'?'week':'day';
   const first=parseDate(from).getTime(), last=parseDate(to).getTime();
   const buckets=new Map();
@@ -41,7 +42,7 @@ export function analyticsData({from,to},range,orders) {
     const date=dateKey(time);
     const key=grouping==='month'?date.slice(0,7):grouping==='week'?Math.floor((time-first)/(7*DAY)):date;
     const bucket=buckets.get(key)??{from:date,to:date,...totalsRow()};
-    const visitors=0,cartVisitors=0;
+    const visitors=Number(visits.get(date)?.visit_sessions??0),cartVisitors=Number(visits.get(date)?.cart_sessions??0);
     const values={...(daily.get(date)??totalsRow()),visitors,cartVisitors};
     for(const field of Object.keys(totals)) {
       bucket[field]+=values[field];
@@ -101,16 +102,16 @@ function chart(metric,buckets,grouping,groupLabel={day:'Daily',week:'Weekly',mon
     '<div class="trend-dates" aria-hidden="true">'+dateTicks+'</div></div></figure>';
 }
 
-export function overviewAnalytics(period,filters,orders,requestedMetric) {
+export function overviewAnalytics(period,filters,orders,requestedMetric,traffic=[]) {
   const metric=metrics.find(item=>item.key===requestedMetric)??metrics[0];
-  const {totals,buckets,grouping}=analyticsData(period,filters.range,orders);
+  const {totals,buckets,grouping}=analyticsData(period,filters.range,orders,traffic);
   const cards=metrics.map(item=>{
     const active=item===metric;
     return '<a href="'+e(href('/admin',{...filters,metric:item.key}))+'" class="panel metric-card'+(active?' metric-active':'')+'"'+
       (active?' aria-current="true"':'')+'><span>'+e(item.label)+'</span><strong>'+e(formatValue(item,item.value(totals)))+'</strong></a>';
   }).join('');
   return '<section class="overview-analytics" aria-label="Store performance"><div class="metric-grid">'+cards+'</div>'+
-    chart(metric,buckets,grouping)+'<p class="subtle traffic-note">Visitor and add-to-cart traffic is not collected.</p></section>';
+    chart(metric,buckets,grouping)+'<p class="subtle traffic-note">First-party session counts begin when tracking is enabled. Each browser tab counts once per Singapore day; blocked scripts and bots may affect totals.</p></section>';
 }
 
 const revenueMetrics=[

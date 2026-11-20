@@ -2,6 +2,7 @@ import { authRoute, handleAuth, db, hash } from './auth-api.mjs';
 import { ApiError, catalogRoute, readCatalog } from './catalog-api.mjs';
 import { commerceRoute, handleCommerce } from './commerce-api.mjs';
 import { emailRoute, handleEmail, processEmailJobs } from './email-api.mjs';
+import { recordTraffic } from './traffic-api.mjs';
 
 function json(body, status, requestId, extra = {}) {
   return new Response(JSON.stringify({ ...body, requestId }), {
@@ -28,12 +29,15 @@ export default {
     const requestId = crypto.randomUUID();
     const start = performance.now();
     let response;
-    const route = emailRoute(pathname) ? 'email-api' : commerceRoute(pathname) ? 'commerce-api' : authRoute(pathname) ? 'account-api' : catalogRoute(pathname);
+    const route = pathname==='/api/traffic' ? 'traffic-api' : emailRoute(pathname) ? 'email-api' : commerceRoute(pathname) ? 'commerce-api' : authRoute(pathname) ? 'account-api' : catalogRoute(pathname);
     try {
       if (pathname === '/api/health') {
         response = ['GET', 'HEAD'].includes(request.method)
           ? json({ ok: true, service: 'cpvaluemart-api', phase: 8 }, 200, requestId)
           : json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } }, 405, requestId, { Allow: 'GET, HEAD' });
+      } else if (route === 'traffic-api') {
+        const result=await recordTraffic(request,env);
+        response=json(result.data,result.status,requestId);
       } else if (route === 'email-api') {
         const result=await handleEmail(request,env);
         response=json(result.data,result.status,requestId,result.headers);
@@ -61,7 +65,7 @@ export default {
     } catch (error) {
       const known = error instanceof ApiError;
       const status = known ? error.status : 500;
-      response = json({ error: { code: known ? error.code : 'INTERNAL_ERROR', message: known ? error.message : 'Unable to process request.' } }, status, requestId, status === 405 ? { Allow: 'GET, HEAD' } : {});
+      response = json({ error: { code: known ? error.code : 'INTERNAL_ERROR', message: known ? error.message : 'Unable to process request.' } }, status, requestId, status === 405 ? { Allow: pathname==='/api/traffic'?'POST':'GET, HEAD' } : {});
     }
     // Fixed route labels only: never log URL queries, user paths, headers, body or secrets.
     console.log(JSON.stringify({ requestId, method: request.method, route: pathname === '/api/health' ? 'health' : (route ?? 'unmatched-api'),

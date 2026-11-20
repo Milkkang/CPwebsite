@@ -515,3 +515,5 @@ button.photo:disabled {opacity:1;cursor:default}
 @media(max-width:750px){.admin-layout,.two-col{grid-template-columns:minmax(0,1fr)}.admin-main,.admin-nav,.two-col>*{min-width:0}.order-display p{overflow-wrap:anywhere}}
 
 .order-group-actions{margin:16px 0}.order-date-group{margin:16px 0}.order-date-group>summary{cursor:pointer;padding:14px 0;font-weight:750}.order-date-group>summary .subtle{margin-left:12px;font-weight:400}.order-date-group .table-wrap{margin-top:4px}
+
+.sales-month{border:1px solid var(--line,#dce6dc);border-radius:14px;background:#fff;margin:12px 0;padding:0 18px}.sales-month>summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 0}.sales-month>summary span{color:#526359}.sales-month .table-wrap{margin:0 0 16px}.sales-month>p{padding:0 0 14px}

@@ -122,14 +122,13 @@ export async function handleAuth(request,env) {
    const rows=await db(env,'catalog_search_counts?select=term,searches,misses&order=searches.desc&limit=100');
    return result({searches:rows.data});
   }
+  if(path==='/api/admin/traffic'&&read){
+   const rows=await db(env,'daily_site_traffic?select=day,visit_sessions,cart_sessions&order=day.desc&limit=400');
+   return result({traffic:rows.data});
+  }
   if(path==='/api/admin/categories'){
    if(read){const rows=await db(env,'categories?select=id,name,icon,color,published,sort_order,version&order=sort_order.asc,id.asc');return result({categories:rows.data});}
-   const data=await bodyJSON(request);
-   if(typeof data.id!=='string'||! /^[a-z0-9-]{1,80}$/.test(data.id)||typeof data.name!=='string'||!data.name.trim()||data.name.length>120||typeof data.published!=='boolean'||!Number.isSafeInteger(data.sort)||!Number.isSafeInteger(data.version)||data.version<0)bad();
-   const body={id:data.id,name:data.name.trim(),published:data.published,sort_order:data.sort};
-   const r=data.version===0?await db(env,'categories',{method:'POST',body,allowFailure:true}):await db(env,'categories?'+new URLSearchParams({id:'eq.'+data.id,version:'eq.'+data.version}),{method:'PATCH',body,allowFailure:true});
-   if(!r.ok||!r.data?.length)throw new ApiError(409,'VERSION_CONFLICT','Category changed or the ID already exists. Reload before saving.');
-   return result({category:r.data[0]});
+   throw new ApiError(405,'METHOD_NOT_ALLOWED','Categories are fixed.');
   }
   if(path==='/api/admin/import'){
    if(read)throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');

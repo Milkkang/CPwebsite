@@ -59,8 +59,7 @@ function revenuePage(params) {
   const {range,period,orders,dateError}=revenueSelection(params,today);
   const metric=revenueMetric(params.get('metric'));
   const filters={range,...(range==='custom'?period:{})};
-  const orderLinks={origin:'revenue',...filters,metric:metric.key};
-  return heading('Revenue','TEST MODE: all orders are simulated. Real revenue is S$0.00; traffic is not collected.',
+  return heading('Revenue','TEST MODE: all orders are simulated. Real revenue is S$0.00.',
     '<button type="button" class="btn primary" data-export="revenue">Generate Report</button>')+
     '<section class="panel revenue-period" aria-labelledby="revenue-period-title"><div class="section-title"><h2 id="revenue-period-title">Date range</h2><span class="subtle">Singapore time</span></div>'+
     '<nav class="period-options" aria-label="Revenue date presets">'+periods.map(([key,label])=>
@@ -73,26 +72,44 @@ function revenuePage(params) {
     (dateError?'<p class="notice" role="status">'+e(dateError)+' Showing the last month.</p>':'')+'</section>'+
     revenueAnalytics(period,orders,filters,metric)+
     '<p class="subtle revenue-note">Based on completed Stripe test payments only. Test revenue is not real business revenue. Cancelled orders are excluded.</p>'+
-    '<div class="section-title admin-section"><h2>Order History <small class="subtle">('+orders.length+')</small></h2><span class="subtle">'+e(period.from)+(period.from===period.to?'':' to '+e(period.to))+'</span></div>'+
-    ordersTable(orders,orderLinks);
+    testSalesCalendar(params);
+}
+function testSalesCalendar(params){
+ const currentYear=Number(orderDate().slice(0,4));
+ const years=[...new Set([currentYear,...state.orders.map(o=>Number(o.date.slice(0,4)))])].filter(Number.isSafeInteger).sort((a,b)=>b-a);
+ const requested=Number(params.get('year'));
+ const year=years.includes(requested)?requested:currentYear;
+ const monthNames=Array.from({length:12},(_,i)=>new Intl.DateTimeFormat('en-SG',{month:'long',timeZone:'UTC'}).format(new Date(Date.UTC(year,i,1))));
+ const paid=state.orders.filter(o=>o.paymentStatus==='paid'&&o.status!=='Cancelled'&&o.date.startsWith(String(year)));
+ const byDay=new Map();
+ for(const order of paid){const day=byDay.get(order.date)??{count:0,total:0};day.count++;day.total+=order.totals.total;byDay.set(order.date,day);}
+ const months=monthNames.map((name,index)=>{
+  const prefix=year+'-'+String(index+1).padStart(2,'0');
+  const days=[...byDay.entries()].filter(([day])=>day.startsWith(prefix)).sort(([a],[b])=>b.localeCompare(a));
+  const total=days.reduce((sum,[,day])=>sum+day.total,0);
+  const count=days.reduce((sum,[,day])=>sum+day.count,0);
+  return '<details class="sales-month"'+(year===currentYear&&index===Number(orderDate().slice(5,7))-1?' open':'')+'><summary><strong>'+name+'</strong><span>'+count+(count===1?' test order':' test orders')+' · '+cash(total)+'</span></summary>'+
+   (days.length?table(['Day','Completed test orders','Test sales total'],days.map(([date,day])=>'<tr><td>'+link(href('/admin/orders',{from:date,to:date,group:'day'}),e(date),'text-link')+'</td><td>'+day.count+'</td><td>'+cash(day.total)+'</td></tr>').join('')):'<p class="subtle">No completed test sales.</p>')+'</details>';
+ }).join('');
+ return '<div class="section-title admin-section"><h2>Sales <small class="subtle">(test mode)</small></h2><form id="sales-year-form"><label>Year <select name="year">'+years.map(value=>'<option value="'+value+'"'+selected(value,year)+'>'+value+'</option>').join('')+'</select></label></form></div>'+
+  '<p class="subtle">Completed Stripe test payments only; cancelled orders are excluded. These totals are not business revenue. Select a day to view all orders for that date.</p>'+months;
 }
 function overview(params) {
   const range=periods.some(([key])=>key===params.get('range'))?params.get('range'):'1m';
-  const q=params.get('q')??'', status=params.get('status')??'';
   const metric=params.get('metric')??'sales';
-  const filters={range,metric,...(q?{q}:{}),...(status?{status}:{})};
+  const filters={range,metric};
   const {from,to}=orderPeriod(range);
   const periodOrders=state.orders.filter(o=>o.date>=from&&o.date<=to);
-  const orders=periodOrders.filter(o=>
-    (o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(!status||o.status===status)
-  ).sort((a,b)=>b.date.localeCompare(a.date));
   const valid=periodOrders.filter(o=>o.status!=='Cancelled');
-  return heading('Overview','TEST MODE · Simulated orders; real revenue S$0.00. Traffic is not collected.',go('/admin/products/new','Add product','btn primary'))+
+  const traffic=state.traffic?.filter(row=>row.day>=from&&row.day<=to)??[];
+  return heading('Overview','TEST MODE · Simulated orders; real revenue S$0.00.',go('/admin/products/new','Add product','btn primary'))+
     '<div class="period-control"><nav class="period-options" aria-label="Order date range">'+periods.map(([key,label])=>
       '<a class="btn small '+(key===range?'chosen':'outline')+'" href="'+e(href('/admin',{...filters,range:key}))+'"'+(key===range?' aria-current="true"':'')+'>'+label+'</a>'
     ).join('')+'</nav><p class="subtle">'+(from===to?to:from+' to '+to)+'</p></div>'+
-    overviewAnalytics({from,to},filters,valid,metric)+
-    '<div class="section-title admin-section"><h2>Recent orders</h2>'+go('/admin/orders','View all orders','btn outline small')+'</div>'+ordersTable(orders.slice(0,5),filters)+salesTables(valid)+
+    overviewAnalytics({from,to},filters,valid,metric,traffic)+
+    '<div class="section-title admin-section"><h2>Website traffic</h2><span class="subtle">Singapore time</span></div>'+
+    (state.traffic===null?'<div class="panel"><p role="status">Traffic counts are temporarily unavailable. '+e(state.trafficError??'')+'</p></div>':
+      table(['Date','Visitor sessions','Add-to-cart sessions'],traffic.slice().sort((a,b)=>b.day.localeCompare(a.day)).map(row=>'<tr><td>'+e(row.day)+'</td><td>'+Number(row.visit_sessions)+'</td><td>'+Number(row.cart_sessions)+'</td></tr>').join('')||'<tr><td colspan="3">Tracking has started; no visits recorded in this period yet.</td></tr>'))+salesTables(valid)+
     '<div class="section-title admin-section"><h2>Quick actions</h2></div><div class="quick-grid">'+go('/admin/products','Manage products and images ↗','panel')+link(href('/admin/products',{low:'1'}),'Review low stock ↗','panel')+go('/admin/search','Inspect search terms ↗','panel')+'</div>';
 }
 const productSearch = (q='',mode='') => state.products.filter(p=>{
@@ -113,9 +130,11 @@ function listPagination(path,params,paging,total,noun){
 }
 function ordersPage(params){
  const q=params.get('q')??'',status=params.get('status')??'';
+ const from=params.get('from')??'',to=params.get('to')??'';
+ const dateError=from||to?revenueDateError(from,to):'';
  const group=['day','week','month','quarter','year'].includes(params.get('group'))?params.get('group'):'day';
  const sort=params.get('sort')==='oldest'?'oldest':'newest';
- const rows=state.orders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(!status||o.status===status));
+ const rows=state.orders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(!status||o.status===status)&&(dateError||!from||o.date>=from)&&(dateError||!to||o.date<=to));
  const sorted=groupOrders(rows,'day',sort).flatMap(g=>g.orders),paging=listPage(params,rows.length);
  const groups=groupOrders(sorted.slice(paging.start,paging.start+paging.size),group,sort);
  const filters={...Object.fromEntries(params),group,sort,size:paging.size,page:paging.page,origin:'orders'};
@@ -123,9 +142,10 @@ function ordersPage(params){
  return heading('Orders',rows.length+' orders · Singapore time · Test payments only','<button class="btn outline" data-export="orders">Export all orders</button>')+
   '<form class="admin-filters" id="admin-filter" data-path="/admin/orders">'+field('Find order','q',q,'placeholder="Order number or customer"')+
   '<label>Status<select name="status"><option value="">All statuses</option>'+opts(statusList,status)+'</select></label>'+
+  field('From','from',from,'type="date"')+field('To','to',to,'type="date"')+
   '<label>Group by<select name="group">'+[['day','Day'],['week','Week'],['month','Month'],['quarter','Quarter'],['year','Year']].map(([key,label])=>'<option value="'+key+'"'+selected(key,group)+'>'+label+'</option>').join('')+'</select></label>'+
   '<label>Sort<select name="sort"><option value="newest"'+selected(sort,'newest')+'>Newest first</option><option value="oldest"'+selected(sort,'oldest')+'>Oldest first</option></select></label>'+
-  pageSize(paging.size,'Orders per page')+'<button class="btn outline">Filter</button></form>'+
+  pageSize(paging.size,'Orders per page')+'<button class="btn outline">Filter</button></form>'+(dateError?'<p class="notice" role="status">'+e(dateError)+' Showing all dates.</p>':'')+
   '<div class="button-row order-group-actions"><button type="button" class="btn outline small" data-order-groups="expand">Expand all</button><button type="button" class="btn outline small" data-order-groups="collapse">Collapse all</button></div>'+pagination+
   (groups.length?groups.map(g=>'<details class="order-date-group" open><summary>'+e(g.label)+' <span class="subtle">'+g.orders.length+(g.orders.length===1?' order':' orders')+' on this page</span></summary>'+ordersTable(g.orders,filters)+'</details>').join(''):empty('No matching orders','Adjust or clear the filters.'))+pagination;
 }
@@ -294,14 +314,10 @@ export function saveHomepage(values) {
   if(next.heroProductIds.length>3||next.heroProductIds.some(id=>findProduct(id)?.status!=='Published')) return 'Choose up to three published banner products.';
   state.settings.homepage=next;save();
 }
-function categorySettings(){
- const rows=[...(state.adminCategories??[]),{id:'',name:'',sort_order:0,published:true,version:0}];
- return '<section class="panel form-stack"><h2>Categories</h2>'+rows.map(c=>'<form data-category-editor class="form-stack" data-version="'+c.version+'"><div class="field-grid">'+field('Category ID','categoryId',c.id,'required pattern="[a-z0-9-]+" '+(c.version?'readonly':''))+field('Name','name',c.name,'required maxlength="120"')+field('Sort order','sort',c.sort_order,'type="number" required')+'</div><label class="check-label"><input name="published" type="checkbox"'+checked(c.published)+'> Published</label><button class="btn outline">'+(c.version?'Save category':'Add category')+'</button></form>').join('')+'</section>';
-}
 function settingsPage() {
   return heading('Settings','Delivery rules apply immediately to the storefront.')+
     '<form class="panel form-stack narrow" id="settings-form"><h2>Singapore delivery</h2>'+amountInput('Standard delivery charge (SGD)','shipping',state.settings.shipping)+
-    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>'+categorySettings();
+    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>';
 }
 export function adminPage(page,id,params) {
   let body;

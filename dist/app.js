@@ -13,6 +13,18 @@ let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersOwner='',ordersLoading=false;
 let checkoutReturnRefresh='';
+const trafficPending=new Set(),trafficRecorded=new Set();
+const trafficDay=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+function trackTraffic(event){
+ const key='cvm-traffic-'+event+'-'+trafficDay();
+ if(trafficRecorded.has(key))return;
+ try{if(sessionStorage.getItem(key))return;}catch{}
+ if(trafficPending.has(key))return;
+ trafficPending.add(key);
+ fetch('/api/traffic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event}),keepalive:true})
+  .then(response=>{if(response.ok){trafficRecorded.add(key);try{sessionStorage.setItem(key,'1');}catch{}}})
+  .catch(()=>{}).finally(()=>trafficPending.delete(key));
+}
 function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,createdAt:row.createdAt,date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(row.createdAt)),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
  items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty})),
  totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt};}
@@ -37,11 +49,13 @@ async function loadAdminProducts() {
   if(!auth.isAdmin||adminProductsLoading)return;
   adminProductsLoading=true;adminProductsError='';
   try{
-    const [result,config,orderResult,emailResult,searchResult,categoryResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs'),authRequest('/api/admin/search'),authRequest('/api/admin/categories')]);
+    const [result,config,orderResult,emailResult,searchResult,categoryResult,trafficResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs'),authRequest('/api/admin/search'),authRequest('/api/admin/categories'),authRequest('/api/admin/traffic').then(data=>({data})).catch(error=>({error:error.message}))]);
     state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
     state.adminCategories=categoryResult.categories;
     categories.splice(0,categories.length,...categoryResult.categories.map(row=>[row.id,row.name,row.icon??'',row.color??'sage']));
     state.searches=Object.fromEntries(searchResult.searches.map(row=>[row.term,{count:row.searches,misses:row.misses}]));
+    state.traffic=trafficResult.data?.traffic??null;
+    state.trafficError=trafficResult.error??'';
     state.settings.homepage=config.homepage?.content??{};
     homepageVersion=config.homepage?.version??0;
     state.settings.shipping=config.delivery?.shipping_cents??0;
@@ -292,6 +306,7 @@ function render({scroll=false}={}) {
   }
   document.body.classList.toggle('admin-body',admin);
   app.innerHTML=admin?body:shopFrame(body,params.get('q')??'');
+  if(!admin)trackTraffic('visit');
   const heading=app.querySelector('h1');
   document.title=(key&&heading?heading.textContent+' · ':'')+'CP Value Mart';
   if(scroll&&path!==lastPath) window.scrollTo(0,0);
@@ -342,7 +357,7 @@ document.addEventListener('submit', async event=>{
   if(location.hash.startsWith('#/admin')) {try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
 
   let error;
-  switch(form.dataset.categoryEditor!==undefined?'category-editor':form.id) {
+  switch(form.id) {
     case 'search-form': {
       const q=f.q.trim();
       navigate(q?'/search':'/shop',q?{q}:{});
@@ -354,8 +369,10 @@ document.addEventListener('submit', async event=>{
       error=revenueDateError(f.from,f.to);
       if(!error) navigate('/admin/revenue',{range:'custom',from:f.from,to:f.to,metric:f.metric});
       break;
+    case 'sales-year-form':
+      navigate('/admin/revenue',{...Object.fromEntries(route().params),year:f.year});break;
     case 'add-to-cart':
-      try{await setShoppingCart(form.dataset.sku,(state.cart[form.dataset.sku]||0)+Number(f.qty));render();message('Added to your basket.');}
+      try{await setShoppingCart(form.dataset.sku,(state.cart[form.dataset.sku]||0)+Number(f.qty));trackTraffic('cart');render();message('Added to your basket.');}
       catch(problem){error=problem.message;}break;
     case 'coupon-form': {
       const code=f.code.trim().toUpperCase();
@@ -394,10 +411,6 @@ document.addEventListener('submit', async event=>{
         adminProductsLoaded=false;await loadAdminProducts();message(shipItem?'Item shipped.':'Fulfilment saved.');}
       catch(problem){error=problem.message;}break;
     }
-    case 'category-editor':
-      try{await authRequest('/api/admin/categories',{id:String(data.get('categoryId')??''),name:String(data.get('name')??''),sort:Number(data.get('sort')),published:data.has('published'),version:Number(form.dataset.version)});
-       adminProductsLoaded=false;await loadAdminProducts();storefront={key:'',data:null,error:null};message('Category saved.');}
-      catch(problem){error=problem.message;}break;
     case 'coupon-editor':
       try{const code=String(data.get('code')??'').trim().toUpperCase(),kind=String(data.get('type')??''),number=Number(data.get('amount'));
         const amount=kind==='fixed'?cents(data.get('amount')):kind==='percent'?number:0,minimum=cents(data.get('min'));
@@ -456,7 +469,7 @@ document.addEventListener('click', async event=>{
     const current=state.cart[sku]??0;
     const added=Math.max(1,row.variant.min-current);
     try{await setShoppingCart(sku,current+added);}catch(error){return message(error.message);}
-    render();
+    trackTraffic('cart');render();
     [...document.querySelectorAll('[data-quick-add]')].find(b=>b.dataset.quickAdd===sku)?.focus({preventScroll:true});
     message('Added '+added+' × '+row.product.name+' ('+row.variant.name+') to your basket.');
   } else if('repurchase' in data) {
@@ -561,6 +574,7 @@ document.addEventListener('change',async event=>{
   }
   if(input.form?.id==='catalog-filters'&&input.tagName==='SELECT') input.form.requestSubmit();
   if(input.form?.id==='admin-filter'&&['size','group','sort'].includes(input.name))input.form.requestSubmit();
+  if(input.form?.id==='sales-year-form'&&input.name==='year')input.form.requestSubmit();
   if(input.id==='select-all') {
     for(const checkbox of document.querySelectorAll('#bulk-form input[name=id]')) checkbox.checked=input.checked;
   }

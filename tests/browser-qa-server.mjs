@@ -30,6 +30,8 @@ createServer(async(req,res)=>{
   if(url.pathname==='/api/admin/email-jobs')return json({jobs:[]});
   if(url.pathname==='/api/admin/search')return json({searches:[{term:'qa',searches:3,misses:0}]});
   if(url.pathname==='/api/admin/categories')return json({categories:[category]});
+  if(url.pathname==='/api/admin/traffic')return json({traffic:[{day:'2026-11-20',visit_sessions:12,cart_sessions:3}]});
+  if(url.pathname==='/api/traffic')return json({recorded:true},202);
   if(url.pathname==='/api/categories')return json({categories:[category]});
   const config={homepage:{content:{title:'QA essentials',primaryLabel:'Shop products',primaryPath:'/shop',categoryTitle:'Categories',categoryIds:[category.id]},version:1},delivery:{shipping_cents:390,free_threshold_cents:5000,version:1},coupons:[]};
   if(url.pathname==='/api/admin/config')return json(config);
