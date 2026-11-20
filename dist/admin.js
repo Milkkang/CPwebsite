@@ -1,8 +1,9 @@
+import {listPage,groupOrders} from './admin-lists.js';
 import {state,save,cash,escape as e,categoryName,categories,statusList,updateOrder,imageUrl,findProduct,orderDate,homepageSettings} from './store.js';
 import {go,link,href,badge,selected,checked,photo,empty,orderDisplay,productLabel,orderItemsPreview} from './shop.js';
 import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
-const nav=[['','Overview'],['revenue','Revenue'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
+const nav=[['','Overview'],['revenue','Revenue'],['orders','Orders'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
   return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Stripe test orders</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
@@ -14,7 +15,7 @@ const amountInput=(label,name,cents)=>field(label,name,(cents/100).toFixed(2),'t
 const moneyToCents=value=>Math.round(Number(value)*100);
 const opts=(values,value)=>values.map(v=>'<option'+selected(v,value)+'>'+e(v)+'</option>').join('');
 const cats=value=>categories.map(([id,name])=>'<option value="'+id+'"'+selected(id,value)+'>'+e(name)+'</option>').join('');
-const editHref=p=>href('/admin/products/'+p.id);
+const editHref=(p,params)=>href('/admin/products/'+p.id,Object.fromEntries(params));
 
 const periods=[
   ['1d','1 day'],['1w','1 week'],['1m','1 month'],['3m','3 months'],['1y','1 year']
@@ -91,31 +92,58 @@ function overview(params) {
       '<a class="btn small '+(key===range?'chosen':'outline')+'" href="'+e(href('/admin',{...filters,range:key}))+'"'+(key===range?' aria-current="true"':'')+'>'+label+'</a>'
     ).join('')+'</nav><p class="subtle">'+(from===to?to:from+' to '+to)+'</p></div>'+
     overviewAnalytics({from,to},filters,valid,metric)+
-    '<div class="section-title admin-section"><h2>Orders <small class="subtle">('+orders.length+')</small></h2><button class="btn outline small" data-export="orders">Export all orders</button></div>'+
-    '<form class="admin-filters" id="admin-filter" data-path="/admin"><input type="hidden" name="range" value="'+e(range)+'"><input type="hidden" name="metric" value="'+e(metric)+'">'+
-    field('Find order','q',q,'placeholder="Order number or customer"')+
-    '<label>Status<select name="status"><option value="">All statuses</option>'+opts(statusList,status)+'</select></label><button class="btn outline">Filter</button></form>'+
-    ordersTable(orders,filters)+salesTables(valid)+
+    '<div class="section-title admin-section"><h2>Recent orders</h2>'+go('/admin/orders','View all orders','btn outline small')+'</div>'+ordersTable(orders.slice(0,5),filters)+salesTables(valid)+
     '<div class="section-title admin-section"><h2>Quick actions</h2></div><div class="quick-grid">'+go('/admin/products','Manage products and images ↗','panel')+link(href('/admin/products',{low:'1'}),'Review low stock ↗','panel')+go('/admin/search','Inspect search terms ↗','panel')+'</div>';
 }
 const productSearch = (q='',mode='') => state.products.filter(p=>{
   const text=[p.name,p.brand,p.sku,categoryName(p.category),...p.variants.map(v=>v.sku)].join(' ').toLowerCase();
   return text.includes(q.toLowerCase())&&(!mode||p.status===mode);
 });
+function pageSize(size,label){
+ return '<label>'+label+'<select name="size">'+[30,50,100].map(n=>'<option value="'+n+'"'+selected(n,size)+'>'+n+'</option>').join('')+'</select></label>';
+}
+function listPagination(path,params,paging,total,noun){
+ const {size,pages,page,start}=paging;
+ const pageLink=(n,label)=>link(href(path,{...Object.fromEntries(params),size,page:n}),label,'btn outline small');
+ const numbers=[...new Set([1,pages,page-1,page,page+1].filter(n=>n>=1&&n<=pages))].sort((a,b)=>a-b);
+ return '<nav class="catalog-pagination" aria-label="'+noun+' pages"><p>Showing '+(total?start+1:0)+'–'+Math.min(start+size,total)+' of '+total+' '+noun.toLowerCase()+' · Page '+page+' of '+pages+'</p><div class="pagination-links">'+
+  (page>1?pageLink(page-1,'Previous'):'<span class="btn outline small" aria-disabled="true">Previous</span>')+
+  numbers.map((n,i)=>(i&&n-numbers[i-1]>1?'<span aria-hidden="true">…</span>':'')+(n===page?'<span class="btn primary small" aria-current="page">'+n+'</span>':pageLink(n,String(n)))).join('')+
+  (page<pages?pageLink(page+1,'Next'):'<span class="btn outline small" aria-disabled="true">Next</span>')+'</div></nav>';
+}
+function ordersPage(params){
+ const q=params.get('q')??'',status=params.get('status')??'';
+ const group=['day','week','month','quarter','year'].includes(params.get('group'))?params.get('group'):'day';
+ const sort=params.get('sort')==='oldest'?'oldest':'newest';
+ const rows=state.orders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(!status||o.status===status));
+ const sorted=groupOrders(rows,'day',sort).flatMap(g=>g.orders),paging=listPage(params,rows.length);
+ const groups=groupOrders(sorted.slice(paging.start,paging.start+paging.size),group,sort);
+ const filters={...Object.fromEntries(params),group,sort,size:paging.size,page:paging.page,origin:'orders'};
+ const pagination=listPagination('/admin/orders',params,paging,rows.length,'Orders');
+ return heading('Orders',rows.length+' orders · Singapore time · Test payments only','<button class="btn outline" data-export="orders">Export all orders</button>')+
+  '<form class="admin-filters" id="admin-filter" data-path="/admin/orders">'+field('Find order','q',q,'placeholder="Order number or customer"')+
+  '<label>Status<select name="status"><option value="">All statuses</option>'+opts(statusList,status)+'</select></label>'+
+  '<label>Group by<select name="group">'+[['day','Day'],['week','Week'],['month','Month'],['quarter','Quarter'],['year','Year']].map(([key,label])=>'<option value="'+key+'"'+selected(key,group)+'>'+label+'</option>').join('')+'</select></label>'+
+  '<label>Sort<select name="sort"><option value="newest"'+selected(sort,'newest')+'>Newest first</option><option value="oldest"'+selected(sort,'oldest')+'>Oldest first</option></select></label>'+
+  pageSize(paging.size,'Orders per page')+'<button class="btn outline">Filter</button></form>'+
+  '<div class="button-row order-group-actions"><button type="button" class="btn outline small" data-order-groups="expand">Expand all</button><button type="button" class="btn outline small" data-order-groups="collapse">Collapse all</button></div>'+pagination+
+  (groups.length?groups.map(g=>'<details class="order-date-group" open><summary>'+e(g.label)+' <span class="subtle">'+g.orders.length+(g.orders.length===1?' order':' orders')+' on this page</span></summary>'+ordersTable(g.orders,filters)+'</details>').join(''):empty('No matching orders','Adjust or clear the filters.'))+pagination;
+}
 function productList(params) {
   const q=params.get('q')??'', status=params.get('status')??'', low=params.get('low')==='1';
   const rows=productSearch(q,status).map(p=>({p,variants:low?p.variants.filter(v=>v.stock<=5):p.variants}))
     .filter(row=>row.variants.length);
+  const paging=listPage(params,rows.length),pagination=listPagination('/admin/products',params,paging,rows.length,'Products');
   return heading('Products',rows.length+' of '+state.products.length+' products',
     '<button class="btn outline" data-export="products">Export CSV</button><button class="btn outline" data-export="template">Import template</button><label class="btn outline">Import CSV / Excel<input type="file" id="import-csv" accept=".csv,.xlsx" hidden></label>'+go('/admin/products/new','Add product','btn primary'))+
     '<p class="subtle import-hint">Edit variant name, price, MOQ or status directly; changes save when you leave the field.</p>'+
     '<form class="admin-filters" id="admin-filter" data-path="/admin/products">'+field('Find product','q',q,'placeholder="Name, brand or SKU"')+
     '<label>Status<select name="status"><option value="">All statuses</option>'+opts(['Published','Draft','Archived'],status)+'</select></label>'+
-    '<label>Availability<select name="low"><option value="">All stock levels</option><option value="1"'+selected(low,true)+'>Low stock (5 or fewer)</option></select></label><button class="btn outline">Filter</button></form>'+
+    '<label>Availability<select name="low"><option value="">All stock levels</option><option value="1"'+selected(low,true)+'>Low stock (5 or fewer)</option></select></label>'+pageSize(paging.size,'Products per page')+'<button class="btn outline">Filter</button></form>'+pagination+
     (!rows.length?empty('No matching products','Adjust or clear the product filters.'):
-    table(['Product','Variant','Price (SGD)','Stock','MOQ','Status',''],rows.map(productRows).join('')));
+    table(['Product','Variant','Price (SGD)','Stock','MOQ','Status',''],rows.slice(paging.start,paging.start+paging.size).map(row=>productRows(row,params)).join('')))+pagination;
 }
-function productRows({p,variants}) {
+function productRows({p,variants},params) {
   const span=' rowspan="'+variants.length+'"';
   const product=productLabel(p,'<b>'+e(p.name)+'</b><small>'+e(p.brand)+' · '+e(p.sku)+'</small>'+
     '');
@@ -123,7 +151,7 @@ function productRows({p,variants}) {
     (i===0?'<td'+span+'>'+product+'</td>':'')+
     '<td><div class="admin-variant">'+photo(p,'variant-thumb',v)+'<div>'+inlineField('name',v.sku,v.name,'text','maxlength="60"')+'<small>'+e(v.sku)+'</small></div></div></td>'+
     '<td class="variant-number">'+inlineField('price',v.sku,(v.price/100).toFixed(2),'number','min="0" max="99999" step="0.01"')+'</td><td class="variant-stock"><span>'+v.stock+'</span><button type="button" class="btn outline small" data-stock="'+e(v.sku)+'" aria-label="Adjust stock for '+e(v.sku)+'">Adjust</button></td><td>'+inlineField('min',v.sku,v.min,'number','min="1" max="100000" step="1"')+'</td>'+
-    (i===0?'<td'+span+'><select class="inline-status" data-inline-status="'+e(p.id)+'" aria-label="Status for '+e(p.name)+'">'+opts(['Published','Draft','Archived'],p.status)+'</select></td><td'+span+'>'+link(editHref(p),'Edit ↗','text-link')+'</td>':'')+'</tr>').join('');
+    (i===0?'<td'+span+'><select class="inline-status" data-inline-status="'+e(p.id)+'" aria-label="Status for '+e(p.name)+'">'+opts(['Published','Draft','Archived'],p.status)+'</select></td><td'+span+'>'+link(editHref(p,params),'Edit ↗','text-link')+'</td>':'')+'</tr>').join('');
 }
 const inlineField=(kind,sku,value,type,extra)=>'<input class="inline-edit inline-'+kind+'" type="'+type+'" data-inline="'+kind+'" data-sku="'+e(sku)+'" aria-label="'+({name:'Variant name',price:'Price in SGD',min:'Minimum quantity'}[kind])+' for '+e(sku)+'" value="'+e(value)+'" '+extra+' required>';
 export function updateInlineProduct(kind,sku,value) {
@@ -162,11 +190,11 @@ function variantFields(v={},i=0,p={},allowRemove=true) {
     '<div class="variant-image-field"><span data-variant-photo>'+photo(p,'thumb',v)+'</span>'+
     field('Variant image URL','variantImage',v.image??'','maxlength="350" placeholder="https://…"')+'</div></fieldset>';
 }
-export function productEditor(id) {
+export function productEditor(id,params=new URLSearchParams()) {
   const existing=findProduct(id);
   if(id!=='new'&&!existing) return empty('Product not found','Return to the product list.',go('/admin/products','View products','btn primary'));
   const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]};
-  return go('/admin/products','← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
+  return link(href('/admin/products',Object.fromEntries(params)),'← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
     '<form id="product-editor" data-id="'+e(existing?.id??'')+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
     field('Product name','name',p.name,'required maxlength="500"')+field('Brand','brand',p.brand,'required maxlength="70"')+
     field('Parent SKU','sku',p.sku,'required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+" '+(existing?'readonly':''))+
@@ -184,13 +212,13 @@ function ordersTable(rows,filters) {
 function orderEditor(id,params) {
   const o=state.orders.find(o=>o.id===id);
   const {origin,...filters}=Object.fromEntries(params);
-  const back=href(origin==='revenue'?'/admin/revenue':'/admin',filters);
+  const back=href(origin==='revenue'?'/admin/revenue':origin==='orders'?'/admin/orders':'/admin',filters);
   if(!o) return empty('Order not found','Return to the order list.',link(back,'View orders','btn primary'));
   const emailJobs=o.emailJobs??[];
   const emailPanel='<section class="panel"><h2>Transactional email</h2><p class="subtle">Test recipients are restricted by the server allowlist.</p>'+
     (emailJobs.length?'<div class="table-wrap"><table><thead><tr><th>Type</th><th>Status</th><th>Recipient</th><th>Attempts</th><th></th></tr></thead><tbody>'+emailJobs.map(job=>
       '<tr><td>'+e(job.kind.replaceAll('_',' '))+'</td><td>'+badge(job.status)+'</td><td>'+e(job.recipient)+'</td><td>'+e(job.attempts)+'</td><td>'+(['failed','bounced'].includes(job.status)?'<button type="button" class="btn small outline" data-resend-email="'+e(job.id)+'">Resend</button>':'—')+'</td></tr>').join('')+'</tbody></table></div>':'<p>No email task has been queued for this order.</p>')+'</section>';
-  return link(back,origin==='revenue'?'← Revenue order history':'← Overview orders','text-link')+heading(e(o.id),'Simulated payment · '+e(o.date))+'<div class="two-col">'+orderDisplay(o)+
+  return link(back,origin==='revenue'?'← Revenue order history':origin==='orders'?'← Orders':'← Overview orders','text-link')+heading(e(o.id),'Simulated payment · '+e(o.date))+'<div class="two-col">'+orderDisplay(o)+
     '<div class="form-stack"><section class="panel"><h2>Delivery address</h2><p>'+e(o.name)+'<br>'+e(o.address)+'<br>Singapore '+e(o.postal)+'</p><p>'+e(o.email)+'</p></section>'+
     '<form class="panel form-stack" id="order-editor" data-order="'+e(id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>'+opts(o.status==='Processing'?['Processing','Shipped']:o.status==='Shipped'?['Shipped','Delivered']:[o.status],o.status)+'</select></label>'+
     field('Courier tracking number','tracking',o.tracking,'maxlength="50" '+(o.status==='Cancelled'?'readonly':''))+
@@ -280,8 +308,8 @@ export function adminPage(page,id,params) {
   switch(page) {
     case '': body=overview(params); break;
     case 'revenue': body=revenuePage(params);break;
-    case 'products': body=id?productEditor(id):productList(params);break;
-    case 'orders': return adminFrame(params.get('origin')==='revenue'?'revenue':'',orderEditor(id,params));
+    case 'products': body=id?productEditor(id,params):productList(params);break;
+    case 'orders': return adminFrame(params.get('origin')==='revenue'?'revenue':'orders',id?orderEditor(id,params):ordersPage(params));
     case 'customers': body=customersPage();break;
     case 'coupons': body=couponPage();break;
     case 'search': body=searchPage();break;

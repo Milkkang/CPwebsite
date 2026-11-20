@@ -513,3 +513,5 @@ button.photo:disabled {opacity:1;cursor:default}
 .test-payment-banner{padding:10px 20px;background:#fff2cd;color:#4a3600;text-align:center;font-size:.875rem;line-height:1.5}
 
 @media(max-width:750px){.admin-layout,.two-col{grid-template-columns:minmax(0,1fr)}.admin-main,.admin-nav,.two-col>*{min-width:0}.order-display p{overflow-wrap:anywhere}}
+
+.order-group-actions{margin:16px 0}.order-date-group{margin:16px 0}.order-date-group>summary{cursor:pointer;padding:14px 0;font-weight:750}.order-date-group>summary .subtle{margin-left:12px;font-weight:400}.order-date-group .table-wrap{margin-top:4px}

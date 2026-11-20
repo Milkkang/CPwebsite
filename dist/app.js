@@ -13,7 +13,7 @@ let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersOwner='',ordersLoading=false;
 let checkoutReturnRefresh='';
-function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,date:String(row.createdAt).slice(0,10),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
+function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,createdAt:row.createdAt,date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(row.createdAt)),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
  items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty})),
  totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt};}
 async function loadOrders(){
@@ -210,7 +210,7 @@ document.addEventListener('error',event=>{
 },true);
 
 const previousAdminRoutes=new Map([
-  ['/admin/reports','/admin'],['/admin/orders','/admin'],['/admin/media','/admin/products'],['/admin/inventory','/admin/products']
+  ['/admin/reports','/admin'],['/admin/media','/admin/products'],['/admin/inventory','/admin/products']
 ]);
 const privateBuyerRoutes=new Set(['/cart','/orders','/saved','/recently-viewed','/confirmation']);
 function route() {
@@ -385,7 +385,7 @@ document.addEventListener('submit', async event=>{
     case 'product-editor':
       try{const payload=productFormPayload(form,data);const existing=form.dataset.id?findProduct(form.dataset.id):null;
         await writeAdminProduct(payload.sku,existing?.version??0,payload.fields,payload.stock);
-        navigate('/admin/products');message('Product saved.');}
+        navigate('/admin/products',Object.fromEntries(route().params));message('Product saved.');}
       catch(problem){error=problem.message;}break;
     case 'order-editor': {
       const order=state.orders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
@@ -436,7 +436,8 @@ document.addEventListener('click', async event=>{
   if('defaultAddress'in data){if(button.disabled)return;button.disabled=true;try{await authRequest('/api/addresses/'+data.defaultAddress,{action:'default'});await loadAddresses();message('Default delivery address saved.');}catch(error){button.disabled=false;message(error.message);}return;}
   if('deleteAddress'in data){try{await authRequest('/api/addresses/'+data.deleteAddress,{action:'delete'});await loadAddresses();}catch(error){message(error.message);}return;}
   if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
-  if('imagePreview' in data) openImage(button);
+  if('orderGroups' in data){for(const group of document.querySelectorAll('.order-date-group'))group.open=data.orderGroups==='expand';}
+  else if('imagePreview' in data) openImage(button);
   else if('closeImage' in data) imageDialog.close();
   else if('save' in data) {
     const saved=state.saved.includes(data.save);
@@ -559,6 +560,7 @@ document.addEventListener('change',async event=>{
     location.hash=(input.value==='#/shop'&&q?href('/shop',{q}):input.value);
   }
   if(input.form?.id==='catalog-filters'&&input.tagName==='SELECT') input.form.requestSubmit();
+  if(input.form?.id==='admin-filter'&&['size','group','sort'].includes(input.name))input.form.requestSubmit();
   if(input.id==='select-all') {
     for(const checkbox of document.querySelectorAll('#bulk-form input[name=id]')) checkbox.checked=input.checked;
   }

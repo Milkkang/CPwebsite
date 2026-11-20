@@ -110,7 +110,7 @@ export function overviewAnalytics(period,filters,orders,requestedMetric) {
       (active?' aria-current="true"':'')+'><span>'+e(item.label)+'</span><strong>'+e(formatValue(item,item.value(totals)))+'</strong></a>';
   }).join('');
   return '<section class="overview-analytics" aria-label="Store performance"><div class="metric-grid">'+cards+'</div>'+
-    chart(metric,buckets,grouping)+'<p class="subtle traffic-note">Visitor and add-to-cart metrics use sample traffic.</p></section>';
+    chart(metric,buckets,grouping)+'<p class="subtle traffic-note">Visitor and add-to-cart traffic is not collected.</p></section>';
 }
 
 const revenueMetrics=[

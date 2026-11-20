@@ -6,8 +6,10 @@ const root=resolve('dist');
 const category={id:'acceptance',name:'QA Products',published:true,sort_order:0,version:1};
 const product={id:'QA-1',sku:'QA-1',name:'QA Product',variant_name:'Standard',brand:'QA Brand',category_id:category.id,description:'Synthetic acceptance fixture',keywords:'QA',status:'Published',featured:true,image_url:'/logo.png',original_image_url:'https://example.invalid/image.png',r2_image_url:'https://example.invalid/image.png',price_cents:250,stock:10,available_quantity:10,min_quantity:1,version:1};
 const account={id:'11111111-1111-4111-8111-111111111111',email:'qa@example.invalid',name:'QA Fixture',verified:true};
-let offline=false;const products=[product];
+let offline=false;const products=Array.from({length:Number(process.env.CP_QA_ROWS)||1},(_,i)=>({...product,id:'QA-'+(i+1),sku:'QA-'+(i+1),name:'QA Product '+(i+1)}));
 const orders=[{id:'99999999-9999-4999-8999-999999999999',number:'CVM-QA',paymentStatus:'paid',fulfilmentStatus:'Processing',tracking:'',subtotal:500,shipping:0,discount:0,total:500,createdAt:new Date().toISOString(),paidAt:new Date().toISOString(),version:1,email:account.email,name:account.name,address:{name:'Synthetic',line:'Synthetic address',postal:'123456'},items:[{sku:'QA-1',name:'QA Product',option:'Standard',price:250,qty:2}]}];
+const orderFixture=orders[0];
+orders.splice(0,orders.length,...Array.from({length:Number(process.env.CP_QA_ROWS)||1},(_,i)=>({...orderFixture,number:'CVM-QA-'+(i+1),createdAt:new Date(Date.UTC(2026,10,20-i)).toISOString(),items:orderFixture.items})));
 createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost:8788');
  const json=(data,status=200)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
