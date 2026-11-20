@@ -1,6 +1,6 @@
 # Phase 6 acceptance — Resend transactional email
 
-Status: **merged and deployed to production; recovery hotfix and live production send remain to be verified**. The user explicitly replied `Approved Phase 6` after Preview and `[TEST ORDER]` manual acceptance. PR #18 is merged. Cloudflare CLI OAuth was completed and the production Worker deployed on 2026-11-20 (Singapore time).
+Status: **approved; recovery release deployed, production test delivery and signed callback replay verified**. The user explicitly replied `Approved Phase 6` after Preview and `[TEST ORDER]` manual acceptance. PR #18 is merged. Cloudflare CLI OAuth was completed and the production Worker deployed on 2026-11-20 (Singapore time).
 
 ## Scope
 
@@ -92,3 +92,30 @@ Coverage includes allowlist enforcement, provider idempotency, raw-body webhook 
 - After authorization: publish the tested changes to PR #19; confirm latest CI/review and actual Builds trigger behavior; apply the reviewed additive migration once; merge/release once; verify the resulting version, health, cron and rejection of unsigned callbacks. If automatic Builds performs the approved release, do not repeat a CLI production deployment.
 - Final production acceptance must observe a `[TEST ORDER]` message sent only to `milkkang93@gmail.com`, its real signed delivery event, and replay without another message. Do not read buyer addresses or credentials. Do not manufacture provider events or expose signing secrets. Keep remaining production/manual checks explicit until independently completed or expressly deferred by the user.
 - Rollback remains code-only to Worker `e0b28acf-0ecc-40d4-ada9-638645af2900`; retain recovery schema, existing orders, inventory, jobs and delivery audits. Stop before Phase 7.
+
+## Recovery release and production acceptance — 2026-11-20
+
+- User explicitly authorized publishing the recovery acceptance evidence, applying the reviewed additive migration, merging/releasing once, and sending TEST ORDER acceptance mail only to the designated mailbox. No new Phase approval or Phase 7 work was inferred.
+- Published candidate `85ff933859ab647999356cc137bbc5ad1cc03d01` has the same Git tree as locally verified `46099f8`. GitHub Phase checks run `44666751050` (96) passed; Cloudflare Preview `927ff480-5db9-4728-af2b-e41824432992` succeeded for that head.
+- Applied `20261120070000_phase6_delivery_recovery.sql` through the production Supabase SQL Editor before releasing the Worker. Verified outbox RLS enabled, anonymous SELECT denied, authenticated reconciliation EXECUTE denied, and service-role reconciliation EXECUTE allowed. Existing three jobs were preserved; no job was active at release preflight.
+- PR #19 merged as `063b65cc50c44021c595faa1c559de5238c9106f`. The main push triggered production Build `0630967a-3873-40b9-9b93-de8380082c20`, outcome success. No additional CLI production deployment was performed.
+- Production deployment `5d70d834-518d-4255-bac2-a6058697713e` serves Worker `9e5fd734-eaaa-4839-97ce-76a51943bbbe` at 100%. Production health returned `phase: 6`; an unsigned Resend callback was rejected with `INVALID_SIGNATURE`.
+- One explicit acceptance job used stable key `order_confirmation/phase6-production-acceptance/063b65c` and an existing paid sandbox order belonging to the designated recipient. The enqueue operation did not create a payment, edit an address, change fulfilment, or alter inventory. Cron claimed and sent it once; the database showed `delivered`, attempt_count 1, one attempt row, one delivered event, is_test true, and the approved-recipient check true.
+- Resend provider message `01a1f6fe-9cee-764a-8aa3-221eac7a01ec` carried `[TEST ORDER]`, the configured From/Reply-To, and only the designated acceptance recipient. Actual production event `msg_3MM0hItw7VQ0MOHoqLwmWJ9An1T` received HTTP 200.
+- Replayed that genuine event through Resend, without reading or fabricating a signing secret. The supplier showed two successful HTTP attempts and a different Worker request ID for replay. The database still showed one send attempt and one delivered event; the replay sent no additional message.
+
+### Acceptance coverage at closure
+
+| Boundary | Evidence |
+| --- | --- |
+| Persistent jobs, protected production configuration, scheduled sending, actual delivery | Production migration/permission checks and the single real acceptance delivery above |
+| Signed callback, unsigned rejection, duplicate delivery event | Real Resend delivery/replay HTTP 200, unsigned rejection, unchanged one-row event audit |
+| Paid-order enqueue failure and concurrent duplicate Stripe callbacks | Isolated PostgreSQL fault injection and parallel callbacks; existing Worker signature/test-mode checks; no new checkout or Stripe replay was initiated in production during this recovery session |
+| Retry delays, four-attempt cap, expired final lease, early/out-of-order callbacks | Isolated PostgreSQL acceptance with all migrations; no provider failure was injected in production |
+| First shipment transition queues once; saving Shipped again does not enqueue | Isolated PostgreSQL admin transition acceptance; no real order was marked shipped for this recovery session |
+| Complaint blocks resend; bounced address requires explicit admin override; repeated admin action deduplicates | Corrected isolated PostgreSQL assertions and service/API checks; no production complaint or bounce was fabricated |
+| Confirmation, shipment, cancellation and sandbox-refund templates; recipient restriction | 47 passing tests plus production approved-recipient/is_test checks; cancellation/refund business operations remain Phase 7 |
+
+The recovery release and production delivery/replay gap are closed. Prior historical paragraphs describe their original checkpoints, not current blockers. The table above distinguishes isolated automated verification from real production observations; it does not claim new manual production checkout, shipment, complaint, or failure-injection acceptance. Phase 4 offline-save verification remains deferred to Phase 8. Stop before Phase 7.
+
+Recovery rollback: redeploy Worker `e0b28acf-0ecc-40d4-ada9-638645af2900` only if necessary; preserve all additive schema, orders, inventory and email audit records.
