@@ -322,16 +322,32 @@ export function orderDisplay(o,{buyerTracking=false}={}) {
     (o.status==='Cancelled'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
     '<p class="subtle">TEST ORDER · No real payment or revenue. Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
 }
-export function confirmation(params) {
-  const session=params.get('session_id');
-  if(session)return crumb('Test payment')+'<div class="page-title"><h1>Checking test payment</h1><p>Stripe is confirming the sandbox payment. Your order history updates after the signed webhook is processed.</p></div><div class="button-row">'+go('/orders','View Purchase History','btn primary')+go('/shop','Continue shopping','btn outline')+'</div>';
-  const id=(params.get('id')??'').trim().toUpperCase();
-  const order=buyerOrders().find(o=>o.id===id);
-  return crumb('Order confirmed')+(order?
-    '<div class="page-title"><h1>Test order placed</h1><p>Your Stripe sandbox order is ready for processing.</p></div>'+orderDisplay(order)+
-    '<div class="button-row order-actions">'+link(href('/orders',{view:'receive',id}),'Track order in To Receive','btn primary')+
-    go('/admin/orders/'+id,'View in admin','btn outline')+'</div>':
-    empty('Order not found','Check your purchase history.',go('/orders','View Purchase History','btn primary')));
+export function confirmation({status,orderNumber}={status:'unavailable'}) {
+  const historyLink=go('/orders','View Purchase History','btn outline');
+  let heading,copy,action='';
+  switch(status) {
+    case 'checking':
+      heading='Checking test payment';copy='Waiting for Stripe to confirm this sandbox payment.';break;
+    case 'paid':
+      heading='Test payment confirmed';copy='Your Stripe sandbox order is ready for processing.';
+      action=link(href('/orders',{id:orderNumber}),'View order details','btn primary');break;
+    case 'refunded':
+      heading='Test payment refunded';copy='You can see the refund status in your order details.';
+      action=link(href('/orders',{id:orderNumber}),'View order details','btn primary');break;
+    case 'failed': case 'expired':
+      heading=status==='expired'?'Test checkout expired':'Test payment did not complete';
+      copy='Return to checkout to review your basket or continue shopping.';
+      action=go('/checkout','Return to checkout','btn primary')+go('/shop','Continue shopping','btn outline');break;
+    case 'timeout': case 'error':
+      heading=status==='timeout'?'Still waiting for payment confirmation':'Payment status temporarily unavailable';
+      copy='Check this payment again or open your purchase history.';
+      action='<button type="button" class="btn primary" data-retry-checkout-status>Check payment status again</button>';break;
+    default:
+      heading='Test checkout unavailable';copy='Check your purchase history for orders on this account.';
+  }
+  const order=orderNumber?' Order <strong>'+e(orderNumber)+'</strong>.':'';
+  return crumb('Test payment')+'<div class="page-title" role="status"><h1>'+heading+'</h1><p>'+copy+order+'</p></div>'+
+    '<div class="button-row">'+action+historyLink+'</div>';
 }
 export const savedPage=()=>crumb(go('/account','My Account'),'Saved items')+'<div class="page-title"><h1>Saved items</h1></div>'+
   (state.products.some(p=>p.status==='Published'&&state.saved.includes(p.id))?grid(state.products.filter(p=>p.status==='Published'&&state.saved.includes(p.id))):empty('No saved items','Save products using the heart on any product card.',go('/shop','Browse products','btn primary')));

@@ -40,6 +40,14 @@ begin
  values(user_id,address_id,1000,0,0,1000,'cs_test_phase6_1') returning id into first_order_id;
  insert into public.order_items(order_id,sku,product_name,variant_name,unit_cents,quantity)
  values(first_order_id,'TEST-1','Acceptance Item','One',1000,1);
+ payment:=public.apply_test_payment_event('evt_payment_wrong_amount','checkout.session.completed',false,first_order_id,'cs_test_phase6_1','pi_test_phase6_1',999,'sgd');
+ if payment->>'outcome'<>'payment_mismatch' then raise exception 'wrong payment amount was accepted'; end if;
+ payment:=public.apply_test_payment_event('evt_payment_wrong_currency','checkout.session.completed',false,first_order_id,'cs_test_phase6_1','pi_test_phase6_1',1000,'usd');
+ if payment->>'outcome'<>'payment_mismatch' then raise exception 'wrong payment currency was accepted'; end if;
+ if (select payment_status from public.orders where id=first_order_id)<>'pending' or
+    exists(select 1 from public.email_confirmation_outbox where order_id=first_order_id) or
+    exists(select 1 from public.inventory_movements where source_key like 'stripe:evt_payment_wrong_%') then
+  raise exception 'mismatched payment changed the order'; end if;
  payment:=public.apply_test_payment_event('evt_phase6_1','checkout.session.completed',false,first_order_id,'cs_test_phase6_1','pi_test_phase6_1',1000,'sgd');
  if payment->>'outcome'<>'paid' then raise exception 'payment did not commit'; end if;
  if (select count(*) from public.email_jobs j where j.order_id=first_order_id)<>1 then raise exception 'confirmation missing'; end if;

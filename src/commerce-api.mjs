@@ -61,6 +61,17 @@ async function createSession(request,env){
  if(!attached.ok||attached.data!==true)throw new ApiError(409,'ORDER_CHANGED','This test order is no longer available.');
  return {status:201,data:{order:orderShape(order),checkoutUrl:session.url,testMode:true}};
 }
+async function readCheckoutStatus(request,env){
+ const who=await identity(request,env);
+ const sessions=new URL(request.url).searchParams.getAll('session_id');
+ const unavailable=()=>new ApiError(404,'CHECKOUT_NOT_FOUND','This test checkout is unavailable.');
+ if(sessions.length!==1||!/^cs_test_[A-Za-z0-9_]{1,200}$/.test(sessions[0]))throw unavailable();
+ const query=new URLSearchParams({select:'order_number,payment_status',user_id:'eq.'+who.account.id,stripe_checkout_session_id:'eq.'+sessions[0],limit:'1'});
+ const {data}=await db(env,'orders?'+query);
+ const row=data[0];
+ if(!row)throw unavailable();
+ return {status:200,data:{orderNumber:'CVM-'+row.order_number,paymentStatus:row.payment_status}};
+}
 function hex(bytes){return [...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');}
 function equal(a,b){if(a.length!==b.length)return false;let diff=0;for(let i=0;i<a.length;i++)diff|=a.charCodeAt(i)^b.charCodeAt(i);return diff===0;}
 async function verifyWebhook(request,env,raw){
@@ -84,7 +95,7 @@ async function webhook(request,env){
  if(!applied.ok)throw new ApiError(409,'PAYMENT_EVENT_REJECTED','Payment event was rejected.');
  return {status:200,data:{received:true}};
 }
-export const commerceRoute=path=>path==='/api/checkout/session'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/orders'||path==='/api/admin/order-actions';
+export const commerceRoute=path=>path==='/api/checkout/session'||path==='/api/checkout/status'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/orders'||path==='/api/admin/order-actions';
 export async function handleCommerce(request,env){
  const path=new URL(request.url).pathname;
  if(path==='/api/stripe/webhook'){
@@ -92,6 +103,9 @@ export async function handleCommerce(request,env){
  }
  if(path==='/api/checkout/session'){
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');return createSession(request,env);
+ }
+ if(path==='/api/checkout/status'){
+  if(request.method!=='GET')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');return readCheckoutStatus(request,env);
  }
  if(path==='/api/admin/order-actions'){
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
@@ -154,7 +168,16 @@ export async function handleCommerce(request,env){
  }
  if(path==='/api/orders'){
   if(request.method!=='GET')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
-  const who=await identity(request,env);const rows=await db(env,'orders?'+new URLSearchParams({select:'id,order_number,payment_status,fulfilment_status,tracking_number,version,subtotal_cents,shipping_cents,discount_cents,total_cents,created_at,paid_at,order_items(sku,product_name,variant_name,image_url,unit_cents,quantity)',user_id:'eq.'+who.account.id,order:'created_at.desc',limit:'100'}));
+  const who=await identity(request,env);
+  const ids=new URL(request.url).searchParams.getAll('id');
+  const query=new URLSearchParams({select:'id,order_number,payment_status,fulfilment_status,tracking_number,version,subtotal_cents,shipping_cents,discount_cents,total_cents,created_at,paid_at,order_items(sku,product_name,variant_name,image_url,unit_cents,quantity)',user_id:'eq.'+who.account.id,order:'created_at.desc',limit:'100'});
+  if(ids.length){
+   const number=/^CVM-([1-9][0-9]{0,18})$/.exec(ids[0])?.[1];
+   if(ids.length!==1||!number||BigInt(number)>9223372036854775807n)throw new ApiError(400,'INVALID_INPUT','Invalid order.');
+   query.set('order_number','eq.'+number);
+   query.set('limit','1');
+  }
+  const rows=await db(env,'orders?'+query);
   return {status:200,data:{orders:rows.data.map(row=>orderShape({...row,number:'CVM-'+row.order_number,items:row.order_items}))}};
  }
  throw new ApiError(404,'NOT_FOUND','API endpoint not found.');

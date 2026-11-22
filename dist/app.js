@@ -11,8 +11,8 @@ let lastPath='', lastProductView='', toastTimer, receiptTimer;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
-let ordersOwner='',ordersLoading=false;
-let checkoutReturnRefresh='';
+let ordersOwner='',ordersLoading=false,orderDetail=null;
+let checkoutReturn=null;
 const trafficPending=new Set(),trafficRecorded=new Set();
 const trafficDay=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function trackTraffic(event){
@@ -33,17 +33,78 @@ async function loadOrders(){
  ordersLoading=true;try{const result=await authRequest('/api/orders');if(auth.account?.id===owner){state.orders=result.orders.map(mapOrder);ordersOwner=owner;}}
  catch(error){message(error.message);}finally{ordersLoading=false;render();}
 }
-async function refreshCheckoutReturn(sessionId){
- const owner=auth.account?.id;
- if(!owner||!sessionId||checkoutReturnRefresh===sessionId)return;
- checkoutReturnRefresh=sessionId;
- for(let attempt=0;attempt<10&&auth.account?.id===owner;attempt++){
-  try{
-   await Promise.all([loadMemberShopping(),loadOrders()]);
-   if(!Object.keys(state.cart).length&&state.orders.some(order=>order.paymentStatus==='paid'))return;
-  }catch{}
-  await new Promise(resolve=>setTimeout(resolve,1000));
+async function loadOrderDetail(detail){
+ try{
+  const result=await authRequest('/api/orders?'+new URLSearchParams({id:detail.id}));
+  if(orderDetail!==detail||auth.account?.id!==detail.owner)return;
+  detail.order=result.orders[0]?mapOrder(result.orders[0]):null;
+ }catch(error){detail.error=error.message;}
+ finally{detail.loading=false;if(orderDetail===detail)render();}
+}
+function buyerOrderPage(params){
+ const id=(params.get('id')??'').trim().toUpperCase(),owner=auth.account?.id;
+ if(!owner||!/^CVM-[1-9][0-9]{0,18}$/.test(id))return orders(params);
+ if(ordersOwner===owner&&state.orders.some(order=>order.id===id&&order.email===auth.account.email))return orders(params);
+ if(!orderDetail||orderDetail.owner!==owner||orderDetail.id!==id){
+  const detail={id,owner,loading:true};
+  orderDetail=detail;
+  queueMicrotask(()=>loadOrderDetail(detail));
  }
+ if(orderDetail.loading)return '<div class="page-title"><h1>Order details</h1><p role="status">Loading order…</p></div>';
+ if(orderDetail.error)return '<div class="page-title"><h1>Order details</h1><p role="alert">'+e(orderDetail.error)+'</p></div><a class="btn outline" href="#/orders">View Purchase History</a>';
+ if(orderDetail.order&&!state.orders.includes(orderDetail.order))state.orders.push(orderDetail.order);
+ return orders(params);
+}
+function checkoutSessionId(params){
+ const sessions=params.getAll('session_id');
+ return sessions.length===1&&/^cs_test_[A-Za-z0-9_]{1,200}$/.test(sessions[0])?sessions[0]:'';
+}
+function clearCheckoutReturn(){
+ checkoutReturn?.controller.abort();
+ checkoutReturn=null;
+}
+function checkoutReturnResult(sessionId){
+ const owner=auth.account?.id;
+ if(!owner||!sessionId||auth.recoveryOnly){clearCheckoutReturn();return {status:'unavailable'};}
+ if(checkoutReturn?.sessionId!==sessionId||checkoutReturn.owner!==owner){
+  clearCheckoutReturn();
+  const check={owner,sessionId,status:'checking',controller:new AbortController()};
+  checkoutReturn=check;
+  queueMicrotask(()=>refreshCheckoutReturn(check));
+ }
+ return checkoutReturn;
+}
+async function refreshCheckoutReturn(check){
+ const {signal}=check.controller;
+ if(signal.aborted)return;
+ const path='/api/checkout/status?'+new URLSearchParams({session_id:check.sessionId});
+ const timeout=setTimeout(()=>{
+  if(signal.aborted)return;
+  check.controller.abort();
+  check.status='timeout';
+  render();
+ },15000);
+ try{
+  while(!signal.aborted){
+   const {orderNumber,paymentStatus}=await authRequest(path,undefined,{signal});
+   if(paymentStatus!=='pending'){
+    Object.assign(check,{status:paymentStatus,orderNumber});
+    render();
+    if(paymentStatus==='paid'){
+     loadOrders();
+     loadMemberShopping().catch(()=>{});
+    }
+    return;
+   }
+   if(check.orderNumber!==orderNumber){check.orderNumber=orderNumber;render();}
+   await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+ }catch(error){
+  if(signal.aborted)return;
+  check.status=error.code==='CHECKOUT_NOT_FOUND'?'unavailable':'error';
+  if(check.status==='unavailable')delete check.orderNumber;
+  render();
+ }finally{clearTimeout(timeout);}
 }
 async function loadAdminProducts() {
   if(!auth.isAdmin||adminProductsLoading)return;
@@ -231,13 +292,18 @@ function route() {
   const hash=location.hash.slice(1) || (location.pathname==='/'||location.pathname.endsWith('.html')?'/':location.pathname);
   const [path,qs='']=hash.split('?');
   let destination=previousAdminRoutes.get(path)??path;
-  let params=Object.fromEntries(new URLSearchParams(qs));
+  const query=new URLSearchParams(qs);
+  let params=Object.fromEntries(query);
   const section='/'+path.replace(/^\//,'').split('/')[0];
   if(section==='/tracking') {
     destination='/orders';
     params={view:'receive',...(params.id?{id:params.id}:{})};
   } else if(privateBuyerRoutes.has(section)) {
     destination=section;
+  }
+  if(destination==='/confirmation'){
+    const sessionId=checkoutSessionId(query);
+    params=sessionId?{session_id:sessionId}:{};
   }
   if(!state.account&&!auth.loading&&privateBuyerRoutes.has(destination)) {
     params={next:href(destination,params).slice(1)};
@@ -251,6 +317,10 @@ function returnAfterSignIn(next) {
   if(path==='checkout'||path==='/checkout') return navigate('/checkout');
   if(path==='/admin'&&auth.isAdmin)return navigate('/admin');
   if(/^\/product\/[A-Za-z0-9_-]{1,100}$/.test(path))return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
+  if(path==='/confirmation'){
+    const sessionId=checkoutSessionId(new URLSearchParams(qs));
+    return sessionId?navigate(path,{session_id:sessionId}):navigate('/account');
+  }
   if(privateBuyerRoutes.has(path)) return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
   navigate('/account');
 }
@@ -258,6 +328,8 @@ function render({scroll=false}={}) {
   state.account=auth.account&&!auth.recoveryOnly?auth.account:null;
   refreshReceipts();
   const {path,params}=route();
+  if(path!=='/confirmation')clearCheckoutReturn();
+  if(path!=='/orders'||!params.has('id'))orderDetail=null;
   const [key='',id='',object='']=path.replace(/^\//,'').split('/');
   const admin=key==='admin';
   if(admin&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
@@ -294,11 +366,9 @@ function render({scroll=false}={}) {
         body=checkout(deliveryAddresses());break;
       }
       case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
-      case 'orders': body=orders(params);break;
+      case 'orders': body=buyerOrderPage(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
-      case 'confirmation':
-        if(auth.account&&!auth.recoveryOnly)queueMicrotask(()=>refreshCheckoutReturn(params.get('session_id')));
-        body=confirmation(params);break;
+      case 'confirmation': body=confirmation(checkoutReturnResult(params.get('session_id')));break;
       case 'saved': body=savedPage();break;
       case 'offers': body=offers();break;
       default: body=info(key);
@@ -444,6 +514,7 @@ document.addEventListener('click', async event=>{
   if(!button) return;
   const data=button.dataset;
   if('authRetry'in data){await refreshSession();return;}
+  if('retryCheckoutStatus'in data){clearCheckoutReturn();render();return;}
   if('retryAdmin'in data){adminProductsError='';loadAdminProducts();return;}
   if('retryCatalog'in data){storefront={key:'',data:null,error:null};pendingStorefront='';render();return;}
   if('defaultAddress'in data){if(button.disabled)return;button.disabled=true;try{await authRequest('/api/addresses/'+data.defaultAddress,{action:'default'});await loadAddresses();message('Default delivery address saved.');}catch(error){button.disabled=false;message(error.message);}return;}

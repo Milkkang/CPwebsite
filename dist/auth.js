@@ -12,9 +12,10 @@ let expiryTimer, refreshRun=0;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('cvm-auth'):null;
 export let onAuthChange=()=>{};
 export function setAuthListener(fn){onAuthChange=fn;channel?.addEventListener('message',()=>refreshSession());}
-export async function authRequest(path,data) {
- const r=await fetch(path,{method:data===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',headers:data===undefined?{}:{'Content-Type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
+export async function authRequest(path,data,{signal}={}) {
+ const r=await fetch(path,{signal,method:data===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',headers:data===undefined?{}:{'Content-Type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
  let body;try{body=await r.json();}catch{throw Error('Account service is unavailable. Please try again.');}
+ signal?.throwIfAborted();
  if(!r.ok){if(r.status===401){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;throw error;}
  return body;
 }
