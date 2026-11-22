@@ -215,7 +215,7 @@ export function productEditor(id,params=new URLSearchParams()) {
   if(id!=='new'&&!existing) return empty('Product not found','Return to the product list.',go('/admin/products','View products','btn primary'));
   const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]};
   return link(href('/admin/products',Object.fromEntries(params)),'← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
-    '<form id="product-editor" data-id="'+e(existing?.id??'')+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
+    '<form id="product-editor" data-id="'+e(existing?.id??'')+'" data-version="'+e(existing?.version??0)+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
     field('Product name','name',p.name,'required maxlength="500"')+field('Brand','brand',p.brand,'required maxlength="70"')+
     field('Parent SKU','sku',p.sku,'required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+" '+(existing?'readonly':''))+
     '<label>Category<select name="category">'+cats(p.category)+'</select></label><label>Status<select name="status">'+opts(['Draft','Published','Archived'],p.status)+'</select></label>'+
@@ -224,7 +224,8 @@ export function productEditor(id,params=new URLSearchParams()) {
     field('Search keywords','keywords',p.keywords,'maxlength="300" placeholder="English names, 中文 keywords, common abbreviations"')+
     field('R2 image URL','image',p.image,'maxlength="350" placeholder="https://…"')+'</section>'+
     '<section class="panel form-stack"><div class="section-title"><h2>Listing, stock and price</h2></div><p class="subtle">Each SKU is one listing. Enter the same SKU in both fields.</p><div id="variant-fields">'+(p.variants.length?p.variants:[{name:'',sku:'',price:0,stock:0,min:1,image:''}]).slice(0,1).map((v,i)=>variantFields(v,i,p,false)).join('')+'</div></section>'+
-    '<div class="button-row"><button class="btn primary">Save product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
+    '<p class="notice" data-product-status role="alert" hidden></p><div class="button-row"><button type="submit" class="btn primary" data-product-save>Save product</button>'+
+    '<button type="button" class="btn outline" data-reload-product hidden>Reload latest product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
 }
 function ordersTable(rows,filters) {
   return table(['Order','Customer','Products','Date','Status','Total',''],rows.map(o=>'<tr><td><b>'+e(o.id)+'</b></td><td>'+e(o.name)+'</td><td>'+orderItemsPreview(o.items)+'</td><td>'+e(o.date)+'</td><td>'+badge(o.status)+'</td><td>'+cash(o.totals.total)+'</td><td>'+link(href('/admin/orders/'+o.id,filters),'Open ↗','text-link')+'</td></tr>').join('')||'<tr><td colspan="7">No matching orders for this period.</td></tr>');

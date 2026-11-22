@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import miniflare from 'miniflare';
@@ -82,5 +83,63 @@ test('real Workers checkout creates test sessions and rejects provider redirects
   const call=()=>mf.dispatchFetch('https://cpvaluemart.com/api/checkout/session',{method:'POST',headers:{Origin:'https://cpvaluemart.com',Cookie:'__Host-cvm-session='+'a'.repeat(64),'Content-Type':'application/json'},body:JSON.stringify({addressId:'88888888-8888-4888-8888-888888888888'})});
   assert.equal((await call()).status,201);redirect=true;assert.equal((await call()).status,503);
   assert.equal(stripeCalls,2);assert.equal(releases,1);
+ }finally{await mf.dispose();}
+});
+
+test('real Workers product editing rejects a stale session and retries from the latest read',async()=>{
+ const origin='https://tfrfkvkjmaqnpxdhxumr.supabase.co',site='https://cpvaluemart.com';
+ const user='55555555-5555-4555-8555-555555555555',sku='EDITOR-1',path='/api/admin/products';
+ const first='a'.repeat(64),second='b'.repeat(64),buyer='c'.repeat(64);
+ const adminHashes=[first,second].map(raw=>createHash('sha256').update(raw).digest('hex'));
+ let product={sku,version:1,price_cents:1000,description:'Initial description',status:'Draft',stock:10};
+ let unavailable=false;
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:true,
+  script:await readFile('.cloudflare/output/v1/workers/default/bundle/index.js','utf8'),compatibilityDate:'2026-11-17',
+  bindings:{SUPABASE_URL:origin,SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixture',SUPABASE_SECRET_KEY:'sb_secret_fixture'},
+  outboundService:async request=>{
+   const url=new URL(request.url),json=(data,status=200)=>new RuntimeResponse(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
+   assert.equal(url.origin,origin);
+   if(url.pathname.endsWith('resolve_web_session')){
+    const {p_hash}=await request.json();
+    return json({account:{id:user,email:'editor@example.invalid'},isAdmin:adminHashes.includes(p_hash)});
+   }
+   if(url.pathname==='/rest/v1/products')return json([product]);
+   if(url.pathname.endsWith('admin_write_product')){
+    if(unavailable)return new RuntimeResponse('Temporarily unavailable',{status:503});
+    const {p_expected_version,p_fields,p_stock}=await request.json();
+    if(p_expected_version!==product.version)return json({code:'PT409',message:'Product version changed'},409);
+    product={...product,...p_fields,stock:p_stock,version:product.version+1};
+    return json(product);
+   }
+   throw Error('Unexpected runtime fixture route');
+  }
+ }));
+ try{
+  const get=session=>mf.dispatchFetch(site+path+'?sku='+sku,{headers:{Cookie:'__Host-cvm-session='+session}});
+  const write=(session,data)=>mf.dispatchFetch(site+path,{method:'POST',
+   headers:{Origin:site,'Content-Type':'application/json',...(session?{Cookie:'__Host-cvm-session='+session}:{})},
+   body:JSON.stringify({sku,...data})});
+  const [a,b]=await Promise.all([get(first),get(second)]);
+  const [firstRead,secondRead]=await Promise.all([a.json(),b.json()]);
+  const winningFields={price_cents:1300,description:'Winning edit',status:'Published'};
+  const winning=await write(first,{version:firstRead.products[0].version,fields:winningFields,stock:14});
+  assert.equal(winning.status,200);
+  const stale={version:secondRead.products[0].version,fields:{price_cents:900,description:'Stale edit',status:'Archived'},stock:3};
+  const rejected=await write(second,stale);
+  assert.equal(rejected.status,409);
+  assert.equal((await rejected.json()).error.code,'VERSION_CONFLICT');
+  assert.equal((await write(buyer,stale)).status,403);
+  assert.equal((await write(null,stale)).status,401);
+  const reloaded=(await (await get(second)).json()).products[0];
+  assert.deepEqual(reloaded,{sku,version:2,...winningFields,stock:14});
+  const reviewed={version:reloaded.version,fields:{description:'Reviewed edit'},stock:reloaded.stock};
+  unavailable=true;
+  const failed=await write(second,reviewed);
+  assert.equal(failed.status,503);
+  assert.equal((await failed.json()).error.code,'AUTH_UNAVAILABLE');
+  unavailable=false;
+  const retried=await write(second,reviewed);
+  assert.equal(retried.status,200);
+  assert.deepEqual((await retried.json()).product,{...reloaded,description:'Reviewed edit',version:3});
  }finally{await mf.dispose();}
 });

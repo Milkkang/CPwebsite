@@ -10,6 +10,7 @@ const imageDialog=document.getElementById('image-dialog');
 let lastPath='', lastProductView='', toastTimer, receiptTimer;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
+let renderedProductEditor=null,heldProductEditor=null;
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersRequest=null,ordersLoaded=false,orderDetail=null;
 let checkoutReturn=null;
@@ -139,7 +140,9 @@ async function loadAdminProducts() {
   finally{if(generation===authGeneration){adminProductsLoading=false;render();}}
 }
 async function writeAdminProduct(sku,version,fields,stock) {
+  const generation=authGeneration;
   const result=await authRequest('/api/admin/products',{sku,version,fields,...(stock===undefined?{}:{stock})});
+  if(generation!==authGeneration)return;
   const product=listingFromApi(result.product,{admin:true});
   rememberListings([product]);
   return product;
@@ -156,7 +159,7 @@ function homepagePayload(values) {
   return content;
 }
 const cents=value=>/^\d+(?:\.\d{1,2})?$/.test(String(value))?Math.round(Number(value)*100):NaN;
-function productFormPayload(form,data) {
+function productFormPayload(data) {
   const one=name=>String(data.get(name)??'').trim();
   const sku=one('sku'),variantSku=one('variantSku');
   if(data.getAll('variantSku').length!==1||variantSku!==sku)throw Error('Each listing uses one variant with the same SKU as the product.');
@@ -171,6 +174,50 @@ function productFormPayload(form,data) {
     image_url:image,r2_image_url:image,price_cents:Math.round(Number(price)*100),min_quantity:min};
   if(!fields.name||!fields.variant_name||!fields.brand||!categories.some(([id])=>id===fields.category_id))throw Error('Complete the product name, variant, brand and category.');
   return {sku,fields,stock};
+}
+function productEditorStatus(form,text) {
+  const status=form.querySelector('[data-product-status]');
+  status.textContent=text;
+  status.hidden=!text;
+}
+async function saveProductEditor(form,data) {
+  const saveButton=form.querySelector('[data-product-save]'),reloadButton=form.querySelector('[data-reload-product]');
+  if(saveButton.disabled)return;
+  const editorHash=location.hash,generation=authGeneration;
+  saveButton.disabled=true;
+  productEditorStatus(form,'');
+  try{
+    const {sku,fields,stock}=productFormPayload(data);
+    await writeAdminProduct(sku,Number(form.dataset.version),fields,stock);
+    if(generation!==authGeneration||!form.isConnected||location.hash!==editorHash)return;
+    navigate('/admin/products',Object.fromEntries(route().params));
+    message('Product saved.');
+  }catch(error){
+    if(generation!==authGeneration||!form.isConnected||location.hash!==editorHash)return;
+    if(error.code==='VERSION_CONFLICT'&&form.dataset.id){
+      reloadButton.hidden=false;
+      productEditorStatus(form,'This product changed in another session. Reload the latest product to replace your unsaved inputs, then review the fields before saving.');
+    }else productEditorStatus(form,error.message);
+  }finally{
+    if(reloadButton.hidden)saveButton.disabled=false;
+  }
+}
+async function reloadProductEditor(button) {
+  const form=button.closest('#product-editor');
+  if(!form||button.disabled||button.hidden)return;
+  const sku=form.dataset.id,editorHash=location.hash,generation=authGeneration;
+  button.disabled=true;
+  try{
+    const {products}=await authRequest('/api/admin/products?'+new URLSearchParams({sku}));
+    if(generation!==authGeneration||!form.isConnected||location.hash!==editorHash)return;
+    if(products.length)rememberListings([listingFromApi(products[0],{admin:true})]);
+    else state.products=state.products.filter(product=>product.id!==sku);
+    render({replaceProductEditor:true});
+    const refreshed=app.querySelector('#product-editor');
+    if(refreshed)productEditorStatus(refreshed,'Latest product loaded. Review the fields before saving.');
+  }catch(error){
+    if(generation===authGeneration&&form.isConnected&&location.hash===editorHash)productEditorStatus(form,error.message+' Reload the latest product before saving.');
+  }finally{button.disabled=false;}
 }
 let shoppingOwner,shoppingLoading=false;
 async function loadMemberShopping() {
@@ -347,7 +394,7 @@ function returnAfterSignIn(next) {
   if(privateBuyerRoutes.has(path)) return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
   navigate('/account');
 }
-function render({scroll=false}={}) {
+function render({scroll=false,replaceProductEditor=false}={}) {
   state.account=auth.account&&!auth.recoveryOnly?auth.account:null;
   refreshReceipts();
   const {path,params}=route();
@@ -356,6 +403,18 @@ function render({scroll=false}={}) {
   const [key='',id='',object='']=path.replace(/^\//,'').split('/');
   const admin=key==='admin';
   if(admin&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
+  const editorRoute=admin&&id==='products'&&object?path+'?'+params:'';
+  const editorKey=editorRoute&&auth.isAdmin&&!auth.recoveryOnly?auth.account?.id+'|'+editorRoute:'';
+  const editorForm=editorRoute&&app.querySelector('#product-editor');
+  // Keep unsaved inputs paired with the version rendered when the editor opened.
+  if(editorForm&&editorKey===renderedProductEditor?.key&&!replaceProductEditor)return;
+  // Detach the form during session verification and restore it only for the same administrator.
+  if(auth.loading&&editorForm&&editorRoute===renderedProductEditor?.route){
+    heldProductEditor={...renderedProductEditor,form:editorForm};
+  }
+  if(heldProductEditor&&(heldProductEditor.route!==editorRoute||(!auth.loading&&heldProductEditor.key!==editorKey))){
+    heldProductEditor=null;
+  }
   const productView=key==='product'?path+'?'+(params.get('sku')??''):'';
   const publicCatalog=['','shop','search','categories','category','product','cart','offers'].includes(key);
   if(publicCatalog&&path!==lastPath&&storefront.key===storefrontKey(path,params))storefront={key:'',data:null,error:null};
@@ -368,7 +427,7 @@ function render({scroll=false}={}) {
   else if(key==='orders'&&ordersRequest&&!ordersLoaded)body='<section class="panel narrow"><h1>Purchase History</h1><p role="status">Loading your orders…</p></section>';
   else if((auth.loading&&privateBuyerRoutes.has(path))||(shoppingLoading&&['cart','saved','recently-viewed'].includes(key)))body='<section class="panel narrow"><h1>My account</h1><p role="status">Loading your shopping list…</p></section>';
   else if(admin) body=auth.isAdmin&&!auth.recoveryOnly?
-    !adminProductsLoaded?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':adminPage(id,object,params):adminGate();
+    !adminProductsLoaded&&!replaceProductEditor?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':adminPage(id,object,params):adminGate();
   else {
     switch(key) {
       case '': body=home(remote.data.products);break;
@@ -402,6 +461,11 @@ function render({scroll=false}={}) {
   }
   document.body.classList.toggle('admin-body',admin);
   app.innerHTML=admin?body:shopFrame(body,params.get('q')??'',{showAdminLink:key!=='account'});
+  renderedProductEditor=editorKey?{key:editorKey,route:editorRoute}:null;
+  if(heldProductEditor?.key===editorKey&&adminProductsLoaded){
+    app.querySelector('#product-editor')?.replaceWith(heldProductEditor.form);
+    heldProductEditor=null;
+  }
   if(!admin)trackTraffic('visit');
   const heading=app.querySelector('h1');
   const title=admin&&id==='orders'&&object?'Order details':key&&heading?heading.textContent:'';
@@ -463,6 +527,7 @@ document.addEventListener('submit', async event=>{
     finally {if(button?.isConnected)button.disabled=false;}
     return;
   }
+  if(form.id==='product-editor'){await saveProductEditor(form,data);return;}
   if(location.hash.startsWith('#/admin')&&!await checkAdminAccess(generation))return;
 
   let error;
@@ -509,11 +574,6 @@ document.addEventListener('submit', async event=>{
     case 'buyer-review-form':
       error=saveBuyerReview(form.dataset.order,form.dataset.sku,Number(f.rating),f.comment);
       if(!error) {modal.close();render();message('Rating submitted.');} break;
-    case 'product-editor':
-      try{const payload=productFormPayload(form,data);const existing=form.dataset.id?findProduct(form.dataset.id):null;
-        await writeAdminProduct(payload.sku,existing?.version??0,payload.fields,payload.stock);
-        navigate('/admin/products',Object.fromEntries(route().params));message('Product saved.');}
-      catch(problem){error=problem.message;}break;
     case 'order-editor': {
       const order=state.adminOrders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
       if(!order?.backendId){error='Order not found.';break;}
@@ -559,6 +619,7 @@ document.addEventListener('click', async event=>{
   if('authRetry'in data){await refreshSession();return;}
   if('retryCheckoutStatus'in data){clearCheckoutReturn();render();return;}
   if('retryAdmin'in data){adminProductsError='';loadAdminProducts();return;}
+  if('reloadProduct'in data){await reloadProductEditor(button);return;}
   if('retryCatalog'in data){storefront={key:'',data:null,error:null};pendingStorefront='';render();return;}
   if('defaultAddress'in data){if(button.disabled)return;button.disabled=true;try{await authRequest('/api/addresses/'+data.defaultAddress,{action:'default'});await loadAddresses();message('Default delivery address saved.');}catch(error){button.disabled=false;message(error.message);}return;}
   if('deleteAddress'in data){try{await authRequest('/api/addresses/'+data.deleteAddress,{action:'delete'});await loadAddresses();}catch(error){message(error.message);}return;}

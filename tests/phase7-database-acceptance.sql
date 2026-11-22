@@ -55,6 +55,43 @@ begin
     has_table_privilege('anon','public.order_operations','SELECT') then raise exception 'operation privilege leaked';end if;
 end $$;
 
+-- Two editor reads of one version; a stale save leaves the winning fields and ledger intact.
+do $$
+declare admin_id uuid; buyer_id uuid; first_version bigint; second_version bigint; latest jsonb; saved jsonb;
+begin
+ select id into admin_id from auth.users where email='phase7@example.invalid';
+ select id into buyer_id from auth.users where email='outsider@example.invalid';
+ perform public.admin_write_product(admin_id,'EDITOR-1',0,
+  '{"name":"Editor fixture","variant_name":"One","brand":"Fixture","category_id":"acceptance","image_url":"https://example.invalid/a.jpg","price_cents":1000,"min_quantity":1}',10);
+ select version into first_version from public.products where sku='EDITOR-1';
+ select version into second_version from public.products where sku='EDITOR-1';
+ perform public.admin_write_product(admin_id,'EDITOR-1',first_version,
+  '{"price_cents":1300,"description":"Saved by another editor","status":"Published"}',14);
+ begin
+  perform public.admin_write_product(admin_id,'EDITOR-1',second_version,
+   '{"price_cents":990,"description":"Stale draft","status":"Archived"}',4);
+  raise exception 'stale product edit committed';
+ exception when sqlstate 'PT409' then null;end;
+ select to_jsonb(p) into latest from public.products p where sku='EDITOR-1';
+ if latest->>'price_cents'<>'1300' or latest->>'description'<>'Saved by another editor' or
+    latest->>'status'<>'Published' or latest->>'stock'<>'14' then raise exception 'stale edit changed the winning product';end if;
+ if (select count(*) from public.inventory_movements where product_id='EDITOR-1')<>2 or
+    not exists(select 1 from public.inventory_movements where product_id='EDITOR-1' and quantity_before=10 and delta=4 and quantity_after=14)
+    then raise exception 'stale edit changed the stock ledger';end if;
+ saved:=public.admin_write_product(admin_id,'EDITOR-1',(latest->>'version')::bigint,'{"description":"Reviewed edit"}',14);
+ if saved->>'description'<>'Reviewed edit' or saved->>'price_cents'<>'1300' or saved->>'stock'<>'14' or
+    (select count(*) from public.inventory_movements where product_id='EDITOR-1')<>2
+    then raise exception 'fresh edit lost the winning price or stock';end if;
+ begin
+  perform public.admin_write_product(buyer_id,'EDITOR-1',(saved->>'version')::bigint,'{}',0);
+  raise exception 'non-admin product edit committed';
+ exception when insufficient_privilege then null;end;
+ if has_function_privilege('anon','public.admin_write_product(uuid,text,bigint,jsonb,integer)','EXECUTE') or
+    has_function_privilege('authenticated','public.admin_write_product(uuid,text,bigint,jsonb,integer)','EXECUTE') or
+    not has_function_privilege('service_role','public.admin_write_product(uuid,text,bigint,jsonb,integer)','EXECUTE')
+    then raise exception 'admin product write RPC privileges changed';end if;
+end $$;
+
 -- Search aggregation and receipt ownership use the same service-only boundary.
 do $$
 declare u uuid; other uuid; a uuid; o uuid;

@@ -9,6 +9,7 @@ export function isAllowedOrigin(request){
 const encoder=new TextEncoder();
 export const authRoute=path=>path.startsWith('/api/auth/')||path==='/api/profile'||path==='/api/addresses'||path.startsWith('/api/addresses/')||path==='/api/shopping'||path==='/api/admin'||path.startsWith('/api/admin/');
 const bad=(message='Check the form and try again.')=>{throw new ApiError(400,'INVALID_INPUT',message);};
+const productVersionConflict=error=>error?.code==='PT409'||(error?.code==='40001'&&error.message==='Product version changed');
 export async function hash(value) {return [...new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(value)))].map(n=>n.toString(16).padStart(2,'0')).join('');}
 async function cipherKey(env) {return crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',encoder.encode('cvm-auth-at-rest-v1:'+env.SUPABASE_SECRET_KEY)),'AES-GCM',false,['encrypt','decrypt']);}
 export async function encrypt(value,env) {
@@ -80,11 +81,12 @@ async function establish(env,data,recoveryOnly) {
  return sessionCookie(raw,maxAge);
 }
 export async function handleAuth(request,env) {
- const path=new URL(request.url).pathname;
+ const {pathname:path,searchParams}=new URL(request.url);
  const read=request.method==='GET';
  if(!read&&request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
  if(!read&&!isAllowedOrigin(request))throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
- if(new URL(request.url).search)bad();
+ const productSku=searchParams.get('sku');
+ if(searchParams.size&&!(read&&path==='/api/admin/products'&&searchParams.size===1&&/^[A-Za-z0-9_-]{1,100}$/.test(productSku??'')))bad();
  const result=(data,cookie,status=200)=>({data,headers:cookie?{'Set-Cookie':cookie}:{},status});
  if(path==='/api/auth/session'&&read){const who=await identity(request,env,{required:false,allowRecovery:true});return result(publicIdentity(who),who?undefined:sessionCookie(''));}
  if(path==='/api/auth/logout'&&!read){const raw=cookieHashRequest(request);if(raw){const sessionHash=await hash(raw);const rows=await db(env,'server_sessions?'+new URLSearchParams({select:'access_token_encrypted',session_hash:'eq.'+sessionHash}));await db(env,'server_sessions?'+new URLSearchParams({session_hash:'eq.'+sessionHash}),{method:'DELETE'});
@@ -135,19 +137,27 @@ export async function handleAuth(request,env) {
    const data=await bodyJSON(request,2*1024*1024);
    if(!Array.isArray(data.rows)||data.rows.length<1||data.rows.length>1000||data.rows.some(row=>!row||typeof row.sku!=='string'||! /^[A-Za-z0-9_-]{1,100}$/.test(row.sku)||!Number.isSafeInteger(row.version)||row.version<0||!Number.isSafeInteger(row.stock)||row.stock<0||row.stock>1000000||!row.fields||Array.isArray(row.fields)||typeof row.fields!=='object'||Object.keys(row.fields).some(key=>!['name','variant_name','brand','category_id','description','keywords','status','featured','image_url','original_image_url','r2_image_url','price_cents','min_quantity'].includes(key))))bad();
    const r=await db(env,'rpc/admin_import_products',{method:'POST',body:{p_actor:who.account.id,p_rows:data.rows},allowFailure:true});
-   if(!r.ok)throw new ApiError(r.data?.code==='40001'?409:400,'IMPORT_REJECTED','Import rejected. No rows were changed. Reload products and check the file.');
+   if(!r.ok)throw new ApiError(['PT409','40001'].includes(r.data?.code)?409:400,'IMPORT_REJECTED','Import rejected. No rows were changed. Reload products and check the file.');
    return result({count:r.data});
   }
   if(path==='/api/admin/products'){
-   if(read){const rows=await db(env,'products?select=id,sku,name,variant_name,brand,category_id,description,keywords,status,featured,image_url,original_image_url,r2_image_url,price_cents,stock,reserved_quantity,available_quantity,min_quantity,version&order=id.asc&limit=1000');return result({products:rows.data});}
+   if(read){
+    const query=new URLSearchParams({select:'id,sku,name,variant_name,brand,category_id,description,keywords,status,featured,image_url,original_image_url,r2_image_url,price_cents,stock,reserved_quantity,available_quantity,min_quantity,version',order:'id.asc',limit:productSku?'1':'1000'});
+    if(productSku)query.set('id','eq.'+productSku);
+    const rows=await db(env,'products?'+query);
+    return result({products:rows.data});
+   }
    const data=await bodyJSON(request);
    if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.sku)||!Number.isSafeInteger(data.version)||data.version<0||
       !data.fields||Array.isArray(data.fields)||typeof data.fields!=='object'||
       Object.keys(data.fields).some(key=>!['name','variant_name','brand','category_id','description','keywords','status','featured','image_url','original_image_url','r2_image_url','price_cents','min_quantity'].includes(key))||
       (data.stock!==undefined&&(!Number.isSafeInteger(data.stock)||data.stock<0||data.stock>1000000)))bad();
    const r=await db(env,'rpc/admin_write_product',{method:'POST',body:{p_actor:who.account.id,p_sku:data.sku,p_expected_version:data.version,p_fields:data.fields,p_stock:data.stock??null},allowFailure:true});
-   if(!r.ok)throw new ApiError(r.data?.code==='40001'||r.data?.code==='23505'?409:400,r.data?.code==='40001'?'VERSION_CONFLICT':'INVALID_PRODUCT',
-     r.data?.code==='40001'?'This product changed in another session. Reload it before saving.':'Product could not be saved. Check the fields and try again.');
+   if(!r.ok){
+    if(productVersionConflict(r.data))throw new ApiError(409,'VERSION_CONFLICT','This product changed in another session. Reload it before saving.');
+    if(r.status>=500||r.status<400||r.status===429)throw new ApiError(503,'AUTH_UNAVAILABLE','The product service is temporarily unavailable. Please try again.');
+    throw new ApiError(r.data?.code==='23505'?409:400,'INVALID_PRODUCT','Product could not be saved. Check the fields and try again.');
+   }
    return result({product:r.data},undefined,data.version===0?201:200);
   }
   if(path==='/api/admin/config'){
