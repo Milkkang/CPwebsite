@@ -49,7 +49,7 @@ export function orderItemLabel(item,showRating=false) {
 }
 export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="item-previews">'+items.map(item=>'<li>'+orderItemLabel(item,showRating)+'</li>').join('')+'</ul>';
 const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
-export function shopFrame(body, query='') {
+export function shopFrame(body, query='', {showAdminLink=true}={}) {
   const items=Object.values(state.cart).reduce((a,b)=>a+b,0);
   return '<div class="test-payment-banner" role="status">TEST PAYMENTS ONLY · Browsing is open. Checkout is restricted to approved testers. No real orders or charges.</div><div class="topline"><span>CP VALUE MART</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
     '<header class="shop-head"><div class="wrap head-inner">'+logo()+
@@ -57,7 +57,7 @@ export function shopFrame(body, query='') {
     '<nav class="top-actions" aria-label="Account and shopping"><a class="header-saved" href="#/saved" title="Saved Items" aria-label="Saved Items">'+icon('heart')+'<span aria-hidden="true">Saved Items</span></a><a href="#/account" title="My account" aria-label="My account">'+icon('user')+'</a><a class="bag-link" href="#/cart" aria-label="Basket, '+items+' items">'+icon('bag')+'<span>Basket</span><b>'+items+'</b></a></nav></div>'+
     '<nav class="category-nav wrap" aria-label="Main categories">'+go('/shop','Shop all')+categories.map(([id,name])=>go('/category/'+id,e(name))).join('')+'</nav></header>'+
     '<main id="main" class="wrap main">'+body+'</main>'+
-    '<footer><div class="wrap footer-inner"><section>'+logo()+'<p>Everyday essentials for Singapore homes.</p></section><section><h3>Shop</h3>'+go('/shop','All products')+go('/offers','Offers')+'</section><section><h3>Customer care</h3>'+go('/delivery','Delivery & returns')+go('/faq','FAQs')+go('/contact','Contact')+'</section><section><h3>CP Value Mart</h3>'+go('/about','About us')+go('/privacy','Privacy')+go('/terms','Terms')+go('/admin','Admin')+'</section></div><div class="wrap footer-bottom">CP Value Mart · Singapore · SGD</div></footer>';
+    '<footer><div class="wrap footer-inner"><section>'+logo()+'<p>Everyday essentials for Singapore homes.</p></section><section><h3>Shop</h3>'+go('/shop','All products')+go('/offers','Offers')+'</section><section><h3>Customer care</h3>'+go('/delivery','Delivery & returns')+go('/faq','FAQs')+go('/contact','Contact')+'</section><section><h3>CP Value Mart</h3>'+go('/about','About us')+go('/privacy','Privacy')+go('/terms','Terms')+(showAdminLink?go('/admin','Admin'):'')+'</section></div><div class="wrap footer-bottom">CP Value Mart · Singapore · SGD</div></footer>';
 }
 const categoryIcon = id => {
   const paths = {

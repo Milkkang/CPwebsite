@@ -29,3 +29,17 @@ test('address list labels the default and offers selection only for other addres
  assert.equal(html.includes('data-default-address="address-a"'),false);assert.ok(html.includes('data-default-address="address-b"'));
  assert.ok(html.includes('>Set default</button>'));assert.equal(html.includes('Press +'),false);
 });
+
+test('the account page has no admin shortcut, including for administrator profiles',async()=>{
+ const {auth,profilePanel,adminGate}=await import('../dist/auth.js');
+ const {shopFrame}=await import('../dist/shop.js');
+ const previous={...auth};
+ try{
+  Object.assign(auth,{account:{name:'QA Admin'},isAdmin:true});
+  const html=shopFrame(profilePanel(),'',{showAdminLink:false});
+  assert.match(html,/id="auth-profile"/);
+  assert.doesNotMatch(html,/href="#\/admin(?:[/?"])/);
+  assert.match(shopFrame(''),/href="#\/admin"/);
+  assert.match(adminGate(),/href="#\/account\?next=\/admin"/);
+ }finally{Object.assign(auth,previous);}
+});
