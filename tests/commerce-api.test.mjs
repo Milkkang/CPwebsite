@@ -159,3 +159,34 @@ test('webhook verifies its signature, rejects live events and forwards only serv
   assert.equal((await worker.fetch(await signedRequest({...event,id:'evt_live',livemode:true}),env)).status,400);
  });
 });
+
+test('checkout rejects a removed delivery address before creating a Stripe session',async()=>{
+ await mocked(async(url)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin:false});
+  if(String(url).includes('create_test_order'))return Response.json({message:'ADDRESS_INVALID'},{status:400});
+  throw Error('Unexpected request');
+ },async()=>{
+  const response=await call('/api/checkout/session',{addressId});
+  assert.equal(response.status,409);
+  assert.equal((await response.json()).error.code,'ADDRESS_INVALID');
+ });
+});
+
+test('admin order detail exposes delivery recipient separately from the customer name',async()=>{
+ for(const isAdmin of [false,true])await mocked(async(url)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin});
+  if(isAdmin&&String(url).includes('read_admin_orders'))return Response.json([{
+   id:orderId,number:'CVM-1000',email:account.email,customer_name:'Member Profile',
+   full_name:'Original Recipient',address_line:'Test Address',postal_code:'001234'
+  }]);
+  throw Error('Unexpected request');
+ },async()=>{
+  const response=await call('/api/admin/orders');
+  assert.equal(response.status,isAdmin?200:403);
+  if(isAdmin){
+   const [order]=(await response.json()).orders;
+   assert.equal(order.name,'Member Profile');
+   assert.deepEqual(order.address,{name:'Original Recipient',line:'Test Address',postal:'001234'});
+  }
+ });
+});

@@ -96,16 +96,41 @@ test('signup confirmation verifies email without creating a login session from t
  });
 });
 
-test('default address mutations derive ownership from the session and reject another owner',async()=>{
- const cookie='__Host-cvm-session='+'d'.repeat(64),id='88888888-8888-4888-8888-888888888888';let seen;
+test('member address deletion and default changes bind to the session owner',async()=>{
+ const buyerSession='d'.repeat(64),otherSession='e'.repeat(64);
+ const buyerCookie='__Host-cvm-session='+buyerSession,otherCookie='__Host-cvm-session='+otherSession;
+ const buyerHash=await hash(buyerSession),otherId='77777777-7777-4777-8777-777777777777';
+ const usedId='88888888-8888-4888-8888-888888888888',backupId='99999999-9999-4999-8999-999999999999';
+ const backup={id:backupId,full_name:'Backup Recipient',address_line:'Test address',postal_code:'000001',is_default:true};
+ const changeCalls=[];
  await mocked(async(url,options)=>{
-  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:false,recoveryOnly:false});
-  if(url.includes('change_member_address')){seen=JSON.parse(options.body);return Response.json(null);}
+  const body=JSON.parse(options.body);
+  if(url.includes('resolve_web_session')){
+   const caller=body.p_hash===buyerHash?account:{...account,id:otherId};
+   return Response.json({account:caller,isAdmin:false,recoveryOnly:false});
+  }
+  if(url.includes('change_member_address')){
+   changeCalls.push(body);
+   return Response.json(body.p_user_id===userId?{ok:true}:null);
+  }
+  if(url.includes('read_member_addresses'))return Response.json(body.p_user_id===userId?[backup]:[]);
   throw Error('Unexpected request');
  },async()=>{
-  const r=await run('/api/addresses/'+id,{action:'default'},{cookie});assert.equal(r.status,404);
-  assert.deepEqual(seen,{p_user_id:userId,p_action:'default',p_address_id:id});
-  assert.equal((await run('/api/addresses/'+id,{action:'default',user_id:'another-user'},{cookie})).status,400);
+  for(const action of ['delete','default']){
+   assert.equal((await run('/api/addresses/'+usedId,{action},{cookie:otherCookie})).status,404);
+   assert.equal((await run('/api/addresses/'+usedId,{action,user_id:userId},{cookie:otherCookie})).status,400);
+  }
+  const removed=await run('/api/addresses/'+usedId,{action:'delete'},{cookie:buyerCookie});
+  assert.equal(removed.status,200);
+  assert.equal((await removed.json()).ok,true);
+  const addresses=await run('/api/addresses',undefined,{cookie:buyerCookie});
+  assert.equal(addresses.status,200);
+  assert.deepEqual((await addresses.json()).addresses,[backup]);
+  assert.deepEqual(changeCalls,[
+   {p_user_id:otherId,p_action:'delete',p_address_id:usedId},
+   {p_user_id:otherId,p_action:'default',p_address_id:usedId},
+   {p_user_id:userId,p_action:'delete',p_address_id:usedId}
+  ]);
  });
 });
 

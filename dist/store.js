@@ -45,7 +45,7 @@ function splitProducts(products) {
 function demoData() {
   const products = splitProducts(catalogProducts);
   return {
-    products,orders:[],cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
+    products,orders:[],adminOrders:[],cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
     settings:{shipping:390,threshold:5000,support:'hello@cpvaluemart.com'},
     coupons:[
       {code:'WELCOME5',type:'percent',amount:5,min:2000,active:true},
@@ -53,26 +53,44 @@ function demoData() {
     ]
   };
 }
-const key='cvm-preview-13m-20261118-v1';
-export let state;
+export const previewStorageKey='cvm-preview-13m-20261118-v1';
+export const obsoletePreviewStorageKey='cvm-preview-2026-v2';
+const preferenceKeys=['products','cart','saved','recentlyViewed','searches','coupon','settings','coupons'];
+const browserPreferences=source=>Object.fromEntries(preferenceKeys.filter(k=>Object.hasOwn(source,k)).map(k=>[k,source[k]]));
+export let state=demoData();
+export function loadPreviewPreferences() {
+  try {
+    localStorage.removeItem(obsoletePreviewStorageKey);
+    const raw=localStorage.getItem(previewStorageKey);
+    if(raw===null)return;
+    let stored;
+    try {stored=JSON.parse(raw);} catch {}
+    if(!stored||typeof stored!=='object'||Array.isArray(stored)){
+      if(localStorage.getItem(previewStorageKey)===raw)localStorage.removeItem(previewStorageKey);
+      return;
+    }
+    const preferences=browserPreferences(stored);
+    if(Object.keys(stored).length!==Object.keys(preferences).length){
+      if(localStorage.getItem(previewStorageKey)!==raw)return;
+      localStorage.setItem(previewStorageKey,JSON.stringify(preferences));
+    }
+    if(state.account){delete preferences.cart;delete preferences.saved;delete preferences.recentlyViewed;}
+    if(Array.isArray(preferences.products)&&preferences.settings)Object.assign(state,preferences);
+  } catch {}
+}
+loadPreviewPreferences();
 try {
-  localStorage.removeItem('cvm-preview-2026-v2');
-  const stored=JSON.parse(localStorage.getItem(key));
-  state=stored?.products && stored?.settings && stored?.orders ? stored : demoData();
   if(state.products.some(p=>p.variants.length!==1||p.id!==p.variants[0].sku)) {
     const oldProducts=state.products;
     const firstSku=new Map(oldProducts.map(p=>[p.id,p.variants[0]?.sku]));
     state.products=splitProducts(oldProducts);
     state.saved=(state.saved??[]).map(id=>firstSku.get(id)??id).filter(Boolean);
     state.recentlyViewed=(state.recentlyViewed??[]).map(item=>({id:item.sku??firstSku.get(item.id)??item.id,sku:item.sku}));
-    for(const order of state.orders) for(const item of order.items) item.productId=item.sku;
     save();
   }
 } catch { state=demoData(); }
-// Browser preview identities are never trusted as authenticated users.
-state.account=null;
 export function save() {
-  try { localStorage.setItem(key,JSON.stringify({...state,account:null,
+  try { localStorage.setItem(previewStorageKey,JSON.stringify({...browserPreferences(state),
     ...(state.account?{cart:{},saved:[],recentlyViewed:[]}:{})})); } catch {}
 }
 export function reset() { state=demoData(); save(); }
