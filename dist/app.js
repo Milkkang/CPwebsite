@@ -305,7 +305,7 @@ function render({scroll=false}={}) {
     }
   }
   document.body.classList.toggle('admin-body',admin);
-  app.innerHTML=admin?body:shopFrame(body,params.get('q')??'');
+  app.innerHTML=admin?body:shopFrame(body,params.get('q')??'',{showAdminLink:key!=='account'});
   if(!admin)trackTraffic('visit');
   const heading=app.querySelector('h1');
   document.title=(key&&heading?heading.textContent+' · ':'')+'CP Value Mart';
