@@ -14,7 +14,7 @@ export default defineConfig(({ isPreview }) => ({
       SUPABASE_URL: bindings.text('https://tfrfkvkjmaqnpxdhxumr.supabase.co'),
       SUPABASE_PUBLISHABLE_KEY: bindings.secret(),
       SUPABASE_SECRET_KEY: bindings.secret(),
-      STRIPE_CHECKOUT_MODE: bindings.text('sandbox'),
+      STRIPE_CHECKOUT_MODE: bindings.text(isPreview ? 'sandbox' : 'live-pilot'),
       STRIPE_SECRET_KEY: bindings.secret(),
       STRIPE_WEBHOOK_SECRET: bindings.secret(),
       RESEND_API_KEY: bindings.secret(),
