@@ -62,3 +62,50 @@ test('admin sign-in and recovery render directly and allow a buyer to switch acc
   assert.match(adminPage('settings','',new URLSearchParams(),passwordPanel()),/Change password[\s\S]*name="currentPassword"/);
  }finally{Object.assign(auth,previous);globalThis.fetch=original;}
 });
+
+test('admin auth forms retain typed values when the tab regains focus',async t=>{
+ const listeners=new Map(), windowListeners=new Map();
+ const location=new URL('https://cpvaluemart.com/#/admin');
+ const app={
+  set innerHTML(html){
+   const id=html.match(/<form id="(auth-login|auth-recover)"/)?.[1];
+   this.form=id?{id,email:'',password:''}:null;
+  },
+  querySelector(){return null;}
+ };
+ const dialog={open:false};
+ const document={
+  visibilityState:'visible',body:{classList:{toggle(){}}},
+  getElementById:id=>id==='app'?app:dialog,
+  addEventListener:(event,callback)=>listeners.set(event,callback)
+ };
+ const window={addEventListener:(event,callback)=>windowListeners.set(event,callback),scrollTo(){}};
+ for(const [name,value] of Object.entries({location,document,window})){
+  const descriptor=Object.getOwnPropertyDescriptor(globalThis,name);
+  Object.defineProperty(globalThis,name,{value,configurable:true,writable:true});
+  t.after(()=>descriptor?Object.defineProperty(globalThis,name,descriptor):delete globalThis[name]);
+ }
+ t.mock.method(globalThis,'fetch',async path=>{
+  assert.equal(path,'/api/auth/session');
+  return Response.json({account:null,isAdmin:false,recoveryOnly:false});
+ });
+ const settle=()=>new Promise(resolve=>setImmediate(resolve));
+ await import('../dist/app.js');
+ await settle();
+ assert.equal(app.form.id,'auth-login');
+ app.form.email='admin@example.invalid';
+ app.form.password='test-only-password';
+ listeners.get('visibilitychange')();
+ await settle();
+ assert.equal(app.form.email,'admin@example.invalid');
+ assert.equal(app.form.password,'test-only-password');
+
+ location.hash='#/admin?mode=recover';
+ windowListeners.get('hashchange')();
+ assert.equal(app.form.id,'auth-recover');
+ assert.equal(app.form.password,'');
+ app.form.email='recovery@example.invalid';
+ listeners.get('visibilitychange')();
+ await settle();
+ assert.equal(app.form.email,'recovery@example.invalid');
+});
