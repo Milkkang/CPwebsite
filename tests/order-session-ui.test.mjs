@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 const previewKey='cvm-preview-13m-20261118-v1';
+const adminOrderId='77777777-7777-4777-8777-777777777777';
+const buyerOrderId='88888888-8888-4888-8888-888888888888';
 const day='2026-11-22T01:00:00Z';
 const buyer={id:'buyer',name:'Synthetic Buyer',email:'buyer@example.invalid'};
 const admin={id:'administrator',name:'Synthetic Admin',email:'admin@example.invalid'};
@@ -29,7 +31,8 @@ function until(condition) {
  });
 }
 function order(number,owner) {
- return {id:'row-'+number,number,createdAt:day,version:0,name:owner.name,email:owner.email,
+ const id=number==='CVM-2077'?adminOrderId:number==='CVM-1321'?buyerOrderId:'row-'+number;
+ return {id,number,createdAt:day,version:0,name:owner.name,email:owner.email,
   address:{name:'Synthetic Recipient',line:'Delivery '+number,postal:'000001'},fulfilmentStatus:'Shipped',tracking:'Tracking '+number,
   items:[{sku:'fixture-sku',name:'Item '+number,option:'Single',price:800,qty:1}],subtotal:800,shipping:100,discount:0,total:900,paymentStatus:'paid'};
 }
@@ -39,6 +42,7 @@ function startBrowser() {
  globalThis.history={state:null,replaceState(_state,_title,url){location=new URL(url,location);}};
  globalThis.localStorage=memoryStorage();
  globalThis.sessionStorage=memoryStorage();
+ globalThis.FormData=class extends URLSearchParams {constructor(form){super(form.values);}};
  globalThis.window=Object.assign(new EventTarget(),{scrollTo(){}});
  globalThis.document=Object.assign(new EventTarget(),{visibilityState:'visible',body:{classList:{toggle(){}}},
   getElementById(id) {
@@ -51,12 +55,16 @@ function startBrowser() {
   postMessage(){}
  };
  let session={account:buyer,isAdmin:false,recoveryOnly:false};
- const orders=new Map([[buyer.id,[order('CVM-BUYER',buyer)]],[admin.id,[order('CVM-ADMIN-OWN',admin)]],[replacement.id,[order('CVM-NEW-BUYER',replacement)]]]);
- let adminOrders=[order('CVM-ADMIN-LIST',buyer)];
+ const orders=new Map([[buyer.id,[order('CVM-BUYER',buyer)]],[admin.id,[order('CVM-1321',admin)]],[replacement.id,[order('CVM-NEW-BUYER',replacement)]]]);
+ let adminOrders=[order('CVM-2077',buyer)];
  const handlers=new Map(),orderRequests=[];
  globalThis.fetch=async (path,options)=>{
   if(path==='/api/orders'||path==='/api/admin/orders'||path==='/api/admin/email-jobs')orderRequests.push({path,cache:options?.cache});
   if(handlers.has(path))return handlers.get(path)(options,session);
+  if(path.startsWith('/api/orders?id=')){
+   const id=new URL(path,location).searchParams.get('id');
+   return Response.json({orders:(orders.get(session.account?.id)??[]).filter(row=>[row.id,row.number].includes(id))});
+  }
   switch(path) {
    case '/api/auth/session':return Response.json(session);
    case '/api/auth/logout':session={account:null,isAdmin:false,recoveryOnly:false};return Response.json({ok:true});
@@ -87,12 +95,18 @@ function startBrowser() {
    Object.defineProperty(event,'target',{value:{closest:()=>({dataset})}});
    document.dispatchEvent(event);
   },
+  submit(id,path,values){
+   const event=new Event('submit',{cancelable:true});
+   Object.defineProperty(event,'target',{value:{id,dataset:{path},values}});
+   document.dispatchEvent(event);
+  },
   visible(){document.dispatchEvent(new Event('visibilitychange'));},
   stored(raw){localStorage.setItem(previewKey,raw);window.dispatchEvent(Object.assign(new Event('storage'),{key:previewKey,newValue:raw}));}
  };
 }
 
 test('order screens use the current authorized browser session',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
  const browser=startBrowser();
  await t.test('upgrading clears legacy order details and keeps public preferences',async()=>{
   localStorage.setItem(previewKey,JSON.stringify(legacy));
@@ -115,16 +129,16 @@ test('order screens use the current authorized browser session',async t=>{
   browser.handlers.set('/api/orders',()=>memberResponse.pending);
   browser.setSession(admin,true);
   browser.tabChanged();
-  browser.route('#/admin/orders/CVM-ADMIN-LIST');
-  await until(()=>browser.html.includes('Delivery CVM-ADMIN-LIST'));
+  browser.route('#/admin/orders/CVM-2077');
+  await until(()=>browser.html.includes('Delivery CVM-2077'));
   assert.match(browser.html,/Synthetic Buyer|buyer@example\.invalid/);
   memberResponse.resolve(Response.json({orders:browser.orders.get(admin.id)}));
   await new Promise(setImmediate);
-  assert.match(browser.html,/Delivery CVM-ADMIN-LIST/);
-  assert.doesNotMatch(browser.html,/CVM-ADMIN-OWN/);
+  assert.match(browser.html,/Delivery CVM-2077/);
+  assert.doesNotMatch(browser.html,/CVM-1321/);
   browser.route('#/orders');
-  await until(()=>browser.html.includes('CVM-ADMIN-OWN'));
-  assert.doesNotMatch(browser.html,/CVM-ADMIN-LIST|CVM-BUYER/);
+  await until(()=>browser.html.includes('CVM-1321'));
+  assert.doesNotMatch(browser.html,/CVM-2077|CVM-BUYER/);
   assert.doesNotMatch([...localStorage.values(),...sessionStorage.values()].join('\n'),/CVM-|example\.invalid.*Delivery|Synthetic Buyer|Tracking CVM/);
   assert.ok(browser.orderRequests.some(request=>request.path==='/api/orders'));
   assert.ok(browser.orderRequests.some(request=>request.path==='/api/admin/orders'));
@@ -132,17 +146,18 @@ test('order screens use the current authorized browser session',async t=>{
   browser.handlers.delete('/api/orders');
  });
  await t.test('a tab session change clears details before checking the new identity',async()=>{
-  browser.route('#/orders?id=CVM-ADMIN-OWN');
-  assert.match(browser.html,/Tracking CVM-ADMIN-OWN/);
+  browser.route('#/orders?id=CVM-1321');
+  await until(()=>browser.html.includes('Tracking CVM-1321'));
+  assert.equal(location.hash,'#/orders?id='+buyerOrderId);
   const sessionResponse=deferred();
   browser.handlers.set('/api/auth/session',()=>sessionResponse.pending);
   browser.setSession(buyer);
   browser.tabChanged();
-  assert.doesNotMatch(browser.html,/CVM-ADMIN-OWN|admin@example\.invalid/);
+  assert.doesNotMatch(browser.html,/CVM-1321|admin@example\.invalid/);
   sessionResponse.resolve(Response.json({account:buyer,isAdmin:false,recoveryOnly:false}));
   await until(()=>browser.html.includes('CVM-BUYER'));
-  assert.doesNotMatch(location.hash,/CVM-ADMIN-OWN/);
-  assert.doesNotMatch(browser.html,/CVM-ADMIN-OWN|CVM-ADMIN-LIST/);
+  assert.equal(location.hash,'#/orders');
+  assert.doesNotMatch(browser.html,/CVM-1321|CVM-2077/);
   browser.handlers.delete('/api/auth/session');
  });
  await t.test('a legacy storage write cannot replace any current order state',()=>{
@@ -179,26 +194,54 @@ test('order screens use the current authorized browser session',async t=>{
  await t.test('a denied admin action clears delivery details and preserves buyer access',async()=>{
   browser.setSession(admin,true);
   browser.tabChanged();
-  browser.route('#/admin/orders/CVM-ADMIN-LIST');
-  await until(()=>browser.html.includes('Delivery CVM-ADMIN-LIST'));
+  browser.route('#/admin/orders/CVM-2077');
+  await until(()=>browser.html.includes('Delivery CVM-2077'));
   assert.match(browser.html,/buyer@example\.invalid/);
   browser.setSession(admin,false);
   browser.handlers.set('/api/admin/access',()=>Response.json({error:{code:'ADMIN_REQUIRED',message:'Administrator access is required.'}},{status:403}));
-  browser.click({orderAction:'refund',orderId:'CVM-ADMIN-LIST'});
+  browser.click({orderAction:'refund',orderId:'CVM-2077'});
   await until(()=>browser.html.includes('does not have administrator access'));
-  assert.doesNotMatch(browser.html,/CVM-ADMIN-LIST|Synthetic Buyer|buyer@example\.invalid/);
-  assert.doesNotMatch(location.hash,/CVM-ADMIN-LIST/);
+  assert.doesNotMatch(browser.html,/CVM-2077|Synthetic Buyer|buyer@example\.invalid/);
+  assert.equal(location.hash,'#/admin/orders');
   browser.handlers.delete('/api/admin/access');
   browser.route('#/orders');
-  await until(()=>browser.html.includes('CVM-ADMIN-OWN'));
-  assert.doesNotMatch(browser.html,/CVM-ADMIN-LIST/);
+  await until(()=>browser.html.includes('CVM-1321'));
+  assert.doesNotMatch(browser.html,/CVM-2077/);
+ });
+ await t.test('opening a cached admin order waits for fresh authorization',async()=>{
+  browser.setSession(admin,true);
+  browser.tabChanged();
+  browser.route('#/admin/orders');
+  await until(()=>browser.html.includes('CVM-2077'));
+  browser.route('#/admin/products');
+  const access=deferred();
+  browser.handlers.set('/api/admin/access',()=>access.pending);
+  browser.setSession(admin,false);
+  browser.route('#/admin/orders/CVM-2077');
+  assert.doesNotMatch(browser.html,/Delivery CVM-2077|buyer@example\.invalid/);
+  access.resolve(Response.json({error:{code:'ADMIN_REQUIRED',message:'Administrator access is required.'}},{status:403}));
+  await until(()=>browser.html.includes('does not have administrator access'));
+  assert.equal(location.hash,'#/admin/orders');
+  browser.handlers.delete('/api/admin/access');
+ });
+ await t.test('a visible admin order clears without a navigation when access is revoked',async()=>{
+  browser.setSession(admin,true);
+  browser.tabChanged();
+  browser.route('#/admin/orders/CVM-2077');
+  await until(()=>browser.html.includes('Delivery CVM-2077'));
+  browser.setSession(admin,false);
+  browser.handlers.set('/api/admin/access',()=>Response.json({error:{code:'ADMIN_REQUIRED',message:'Administrator access is required.'}},{status:403}));
+  t.mock.timers.tick(30_000);
+  await until(()=>browser.html.includes('does not have administrator access'));
+  assert.doesNotMatch(browser.html,/CVM-2077|buyer@example\.invalid/);
+  browser.handlers.delete('/api/admin/access');
  });
  await t.test('a delayed receipt response cannot update the replacement buyer’s page',async()=>{
   const receipt=deferred();
   browser.handlers.set('/api/orders/receipt',()=>receipt.pending);
   browser.route('#/orders?view=receive');
-  assert.match(browser.html,/data-receive-order="CVM-ADMIN-OWN"/);
-  browser.click({receiveOrder:'CVM-ADMIN-OWN'});
+  assert.match(browser.html,/data-receive-order="CVM-1321"/);
+  browser.click({receiveOrder:'CVM-1321'});
   browser.setSession(replacement);
   browser.tabChanged();
   browser.route('#/orders');
@@ -208,7 +251,7 @@ test('order screens use the current authorized browser session',async t=>{
   assert.equal(location.hash,'#/orders');
   assert.doesNotMatch(browser.toast,/Receipt confirmed/);
   assert.match(browser.html,/CVM-NEW-BUYER/);
-  assert.doesNotMatch(browser.html,/CVM-ADMIN-OWN/);
+  assert.doesNotMatch(browser.html,/CVM-1321/);
   browser.handlers.delete('/api/orders/receipt');
  });
  await t.test('a delayed admin list cannot overwrite orders verified for a new admin session',async()=>{
@@ -221,10 +264,10 @@ test('order screens use the current authorized browser session',async t=>{
   await until(()=>started);
   browser.handlers.delete('/api/admin/orders');
   browser.tabChanged();
-  await until(()=>browser.html.includes('CVM-ADMIN-LIST'));
+  await until(()=>browser.html.includes('CVM-2077'));
   oldResponse.resolve(Response.json({orders:[order('CVM-STALE-ADMIN',buyer)]}));
   await new Promise(setImmediate);
-  assert.match(browser.html,/CVM-ADMIN-LIST/);
+  assert.match(browser.html,/CVM-2077/);
   assert.doesNotMatch(browser.html,/CVM-STALE-ADMIN/);
  });
  await t.test('a delayed authorization failure cannot sign out the current buyer',async()=>{
@@ -243,6 +286,27 @@ test('order screens use the current authorized browser session',async t=>{
   assert.match(browser.html,/CVM-NEW-BUYER/);
   assert.doesNotMatch(browser.toast,/Sign in again/);
   assert.doesNotMatch([...localStorage.values(),...sessionStorage.values()].join('\n'),/CVM-|(?:buyer|new-buyer|admin)@example\.invalid|Synthetic Buyer|Legacy Recipient/);
+ });
+ await t.test('administrator order searches stay in memory and detail links use opaque IDs',async()=>{
+  browser.setSession(admin,true);
+  browser.tabChanged();
+  browser.route('#/admin/orders?q=buyer%40example.invalid');
+  await until(()=>browser.html.includes('CVM-2077'));
+  assert.equal(location.hash,'#/admin/orders');
+  assert.match(browser.html,/name="q" value="buyer@example\.invalid"/);
+  assert.doesNotMatch(browser.html,/href="[^"]*(?:CVM-2077|buyer%40example\.invalid)/);
+  assert.ok(browser.html.includes('href="#/admin/orders/'+adminOrderId));
+  browser.submit('admin-filter','/admin/orders',{q:'Synthetic Buyer'});
+  await until(()=>browser.html.includes('value="Synthetic Buyer"'));
+  assert.equal(location.hash,'#/admin/orders');
+  browser.route('#/admin/orders/CVM-2077?origin=orders');
+  await until(()=>browser.html.includes('Delivery CVM-2077'));
+  assert.equal(location.hash,'#/admin/orders/'+adminOrderId+'?origin=orders');
+  assert.match(browser.html,/href="#\/admin\/orders">← Orders/);
+  browser.setSession(replacement);
+  browser.tabChanged();
+  browser.route('#/orders');
+  await until(()=>browser.html.includes('CVM-NEW-BUYER'));
  });
  await t.test('checkout return ignores an earlier session’s late payment result',async()=>{
   const path='/api/checkout/status?session_id=cs_test_privacyFixture';

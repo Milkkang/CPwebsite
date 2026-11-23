@@ -58,7 +58,7 @@ export const obsoletePreviewStorageKey='cvm-preview-2026-v2';
 const preferenceKeys=['products','cart','saved','recentlyViewed','searches','coupon','settings','coupons'];
 const browserPreferences=source=>Object.fromEntries(preferenceKeys.filter(k=>Object.hasOwn(source,k)).map(k=>[k,source[k]]));
 export let state=demoData();
-export function loadPreviewPreferences() {
+export function loadPreviewPreferences({storageEvent=false}={}) {
   try {
     localStorage.removeItem(obsoletePreviewStorageKey);
     const raw=localStorage.getItem(previewStorageKey);
@@ -73,6 +73,10 @@ export function loadPreviewPreferences() {
     if(Object.keys(stored).length!==Object.keys(preferences).length){
       if(localStorage.getItem(previewStorageKey)!==raw)return;
       localStorage.setItem(previewStorageKey,JSON.stringify(preferences));
+    }
+    if(storageEvent){
+      if(typeof preferences.coupon==='string')state.coupon=preferences.coupon;
+      return;
     }
     if(state.account){delete preferences.cart;delete preferences.saved;delete preferences.recentlyViewed;}
     if(Array.isArray(preferences.products)&&preferences.settings)Object.assign(state,preferences);
@@ -195,8 +199,7 @@ export function rememberProduct(product,sku) {
 export function buyerOrders() {
   return state.account?state.orders.filter(order=>order.email===state.account.email):[];
 }
-export function repurchaseOrder(id) {
-  const order=buyerOrders().find(o=>o.id===id);
+export function repurchaseOrder(id,order=buyerOrders().find(o=>o.id===id)) {
   if(!order) return {error:'Order not found in your account.'};
   const basket={...state.cart};
   const skipped=[];
@@ -226,12 +229,11 @@ export function confirmBuyerReceipt(id) {
   if(order?.status!=='Shipped') return 'This order is unavailable for receipt confirmation.';
   return updateOrder(order,'Delivered',order.tracking);
 }
-export function reviewItem(id,sku) {
-  const order=buyerOrders().find(o=>o.id===id);
+export function reviewItem(id,sku,order=buyerOrders().find(o=>o.id===id)) {
   return order&&pendingReviewItems(order).find(item=>item.sku===sku);
 }
-export function saveBuyerReview(id,sku,rating,comment) {
-  const item=reviewItem(id,sku);
+export function saveBuyerReview(id,sku,rating,comment,order) {
+  const item=reviewItem(id,sku,order);
   if(!item) return 'This item is unavailable for review.';
   if(!Number.isInteger(rating)||rating<1||rating>5) return 'Choose a rating from 1 to 5.';
   item.review={rating,comment:comment.trim().slice(0,500)};

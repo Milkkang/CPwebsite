@@ -25,14 +25,13 @@ begin
 end $$;
 revoke all on function private.snapshot_order_delivery_address() from public,anon,authenticated,service_role;
 
--- Only copy an owned address whose current values were recorded when the order was placed.
--- A modified address with an equal timestamp may have changed later in the same transaction.
+-- Only copy an owned address that has never been edited. Transaction-start timestamps
+-- cannot prove whether an edit preceded checkout. Unverified addresses remain unavailable.
 insert into private.order_delivery_addresses(order_id,full_name,address_line,postal_code)
 select o.id,a.full_name,a.address_line,a.postal_code
 from public.orders o
 join public.buyer_addresses a on a.id=o.address_id and a.user_id=o.user_id
-where a.created_at<=o.created_at
-  and (a.updated_at<o.created_at or (a.updated_at=o.created_at and a.version=1));
+where a.version=1 and a.created_at=a.updated_at and a.created_at<=o.created_at;
 
 create trigger snapshot_order_delivery_address
 after insert on public.orders

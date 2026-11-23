@@ -37,8 +37,8 @@ begin
  end if;
 
  if (select count(*) from jsonb_array_elements(public.read_admin_orders(admin)) item
-     where item->>'number' in ('CVM-1001','CVM-1002') and item->>'full_name' is null
-       and item->>'address_line' is null and item->>'postal_code' is null)<>2 then
+     where item->>'number' in ('CVM-1001','CVM-1002','CVM-1003') and item->>'full_name' is null
+       and item->>'address_line' is null and item->>'postal_code' is null)<>3 then
   raise exception 'historical orders with unreliable addresses were hidden or assigned unverified delivery details';
  end if;
  begin

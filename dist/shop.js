@@ -257,7 +257,7 @@ function receivedButton(order) {
   return '<button type="button" class="btn primary small" data-receive-order="'+e(order.id)+'" aria-label="Received order '+e(order.id)+'">Received</button>';
 }
 function receiveOrderRow(order,stage) {
-  const tracking=href('/orders',{view:'receive',stage:stage.key,id:order.id});
+  const tracking=href('/orders',{view:'receive',stage:stage.key,id:order.backendId??order.id});
   const pictures=order.items.map(item=>{
     const product=findProduct(item.productId)??{name:item.name};
     return '<li>'+photo(product,'receive-order-thumb',product.variants?.find(variant=>variant.sku===item.sku))+'</li>';
@@ -269,12 +269,14 @@ function receiveOrderRow(order,stage) {
     '<div class="receive-order-actions">'+badge(order.status,status)+link(tracking,'Track order','text-link')+
     (order.status==='Shipped'?receivedButton(order):'')+'</div></article>';
 }
-function rateOrderCard(order) {
-  const content=pendingReviewItems(order).map(item=>
+function rateOrderItems(order) {
+  return pendingReviewItems(order).map(item=>
     '<li>'+orderItemLabel(item)+'<button type="button" class="btn primary small" data-rate-order="'+e(order.id)+'" data-rate-sku="'+e(item.sku)+'">Rate product<span class="sr-only">: '+e(item.name)+'</span></button></li>'
   ).join('');
+}
+function rateOrderCard(order) {
   return '<section class="panel buyer-status-order"><div class="section-title"><h2>'+e(order.id)+'</h2>'+badge(order.status)+'</div>'+
-    '<ul class="order-items">'+content+'</ul><div class="button-row">'+link(href('/orders',{id:order.id}),'View order','btn outline small')+'</div></section>';
+    '<ul class="order-items">'+rateOrderItems(order)+'</ul><div class="button-row">'+link(href('/orders',{id:order.backendId??order.id}),'View order','btn outline small')+'</div></section>';
 }
 export function buyerReviewDialog(orderId,item) {
   return '<form id="buyer-review-form" class="form-stack" data-order="'+e(orderId)+'" data-sku="'+e(item.sku)+'"><h2 id="dialog-title">Rate product</h2>'+
@@ -285,21 +287,22 @@ export function buyerReviewDialog(orderId,item) {
 function repurchaseButton(order) {
   return '<button type="button" class="btn outline small" data-repurchase="'+e(order.id)+'" aria-label="Repurchase order '+e(order.id)+'">Repurchase</button>';
 }
-export function orders(params=new URLSearchParams()) {
+export function orders(params=new URLSearchParams(),order=null) {
   const view=params.get('view');
   const id=(params.get('id')??'').trim().toUpperCase();
   const label=Object.hasOwn(purchaseTabs,view)?purchaseTabs[view]:id?'Order details':'Purchase History';
   const nav=crumb(go('/account','My account'),label)+'<div class="page-title"><h1>'+label+'</h1></div>';
   if(!state.account) return nav+empty('Sign in to see your orders','Use your demo account to view purchases.',go('/account','Sign in','btn primary'));
   const purchases=buyerOrders();
-  const order=id?purchases.find(o=>o.id===id):null;
   const stage=trackingStages.find(item=>item.key===params.get('stage'))??
     trackingStages.find(item=>item.status===order?.status)??trackingStages[1];
   const stageNav=view==='receive'?trackingStageNav(purchases,stage):'';
   if(id) {
     const back=link(href('/orders',view==='receive'?{view,stage:stage.key}:{}),view==='receive'?'Back to To Receive':'Back to Purchase History','btn outline small');
+    const rateItems=order?rateOrderItems(order):'';
     return nav+'<div class="buyer-dashboard">'+stageNav+
       (order?orderDisplay(order,{buyerTracking:view==='receive'}):'<p class="notice">Order not found in your account.</p>')+
+      (rateItems?'<section class="panel"><h2>Rate products</h2><ul class="order-items">'+rateItems+'</ul></section>':'')+
       '<div class="button-row">'+back+(view==='receive'&&order?.status==='Shipped'?receivedButton(order):'')+
       (!view&&order?repurchaseButton(order):'')+'</div></div>';
   }
@@ -312,7 +315,7 @@ export function orders(params=new URLSearchParams()) {
         empty(emptyCopy[0],emptyCopy[1],go('/orders','View Purchase History','btn outline')))+'</div>';
   }
   return nav+(!purchases.length?empty('No orders yet','Orders you place in this browser appear here.',go('/shop','Browse products','btn primary')):
-    '<div class="panel table-wrap"><table><thead><tr><th>Order</th><th>Products</th><th>Date</th><th>Status</th><th>Total</th><th></th></tr></thead><tbody>'+purchases.map(o=>'<tr><td>'+e(o.id)+'</td><td>'+orderItemsPreview(o.items,{showRating:true})+'</td><td>'+e(o.date)+'</td><td>'+badge(o.status)+'</td><td>'+cash(o.totals.total)+'</td><td><div class="purchase-history-actions">'+link(href('/orders',{id:o.id}),'View order ↗','text-link')+repurchaseButton(o)+'</div></td></tr>').join('')+'</tbody></table></div>');
+    '<div class="panel table-wrap"><table><thead><tr><th>Order</th><th>Products</th><th>Date</th><th>Status</th><th>Total</th><th></th></tr></thead><tbody>'+purchases.map(o=>'<tr><td>'+e(o.id)+'</td><td>'+orderItemsPreview(o.items,{showRating:true})+'</td><td>'+e(o.date)+'</td><td>'+badge(o.status)+'</td><td>'+cash(o.totals.total)+'</td><td><div class="purchase-history-actions">'+link(href('/orders',{id:o.backendId??o.id}),'View order ↗','text-link')+repurchaseButton(o)+'</div></td></tr>').join('')+'</tbody></table></div>');
 }
 export function orderDisplay(o,{buyerTracking=false}={}) {
   if(!o) return '';
@@ -322,18 +325,19 @@ export function orderDisplay(o,{buyerTracking=false}={}) {
     (o.status==='Cancelled'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
     '<p class="subtle">TEST ORDER · No real payment or revenue. Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
 }
-export function confirmation({status,orderNumber}={status:'unavailable'}) {
+export function confirmation({status,orderNumber,orderId}={status:'unavailable'}) {
   const historyLink=go('/orders','View Purchase History','btn outline');
+  const details=orderId?link(href('/orders',{id:orderId}),'View order details','btn primary'):'';
   let heading,copy,action='';
   switch(status) {
     case 'checking':
       heading='Checking test payment';copy='Waiting for Stripe to confirm this sandbox payment.';break;
     case 'paid':
       heading='Test payment confirmed';copy='Your Stripe sandbox order is ready for processing.';
-      action=link(href('/orders',{id:orderNumber}),'View order details','btn primary');break;
+      action=details;break;
     case 'refunded':
       heading='Test payment refunded';copy='You can see the refund status in your order details.';
-      action=link(href('/orders',{id:orderNumber}),'View order details','btn primary');break;
+      action=details;break;
     case 'failed': case 'expired':
       heading=status==='expired'?'Test checkout expired':'Test payment did not complete';
       copy='Return to checkout to review your basket or continue shopping.';

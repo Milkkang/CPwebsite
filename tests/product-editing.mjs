@@ -81,6 +81,7 @@ test('an open editor keeps its version until the admin reloads and reviews the l
   description:'Original description',status:'Draft',image_url:'https://example.invalid/editor.jpg',
   price_cents:1000,stock:10,min_quantity:1,version:1};
  let latest=initial,writeUnavailable=false,reloadUnavailable=false;
+ let sessionResponse,writeResponse;
  const location=new URL('https://cpvaluemart.com/#/admin/products/EDITOR-1?sort=stock');
  const events=new Map(),windowEvents=new Map(),toast={textContent:'',hidden:true},dialog={open:false};
  let account={id:'admin',email:'admin@example.invalid',name:'Admin'};
@@ -121,7 +122,8 @@ test('an open editor keeps its version until the admin reloads and reviews the l
  const writes=[];
  t.mock.method(globalThis,'fetch',async(path,options)=>{
   switch(path){
-   case '/api/auth/session':case '/api/admin/access':return Response.json({account,isAdmin:true});
+   case '/api/auth/session':return sessionResponse??Response.json({account,isAdmin:true});
+   case '/api/admin/access':return Response.json({account,isAdmin:true});
    case '/api/orders':case '/api/admin/orders':return Response.json({orders:[]});
    case '/api/shopping':return Response.json({cart:[],saved:[],recent:[]});
    case '/api/admin/config':return Response.json({coupons:[]});
@@ -135,6 +137,7 @@ test('an open editor keeps its version until the admin reloads and reviews the l
    case '/api/admin/products':{
     if(options.method==='GET')return Response.json({products:[latest]});
     const write=JSON.parse(options.body);writes.push(write);
+    if(writeResponse)return writeResponse;
     if(write.version!==latest.version)return Response.json({error:{code:'VERSION_CONFLICT',message:'This product changed in another session. Reload it before saving.'}},{status:409});
     if(writeUnavailable)return Response.json({error:{code:'AUTH_UNAVAILABLE',message:'The product service is temporarily unavailable. Please try again.'}},{status:503});
     latest={...latest,...write.fields,stock:write.stock,version:latest.version+1};
@@ -157,7 +160,19 @@ test('an open editor keeps its version until the admin reloads and reviews the l
  assert.equal(app.form,null);
  await settle();
  assert.equal(app.form,staleForm);
- await submit();
+ let resolveWrite,resolveSession;
+ writeResponse=new Promise(resolve=>{resolveWrite=resolve;});
+ sessionResponse=new Promise(resolve=>{resolveSession=resolve;});
+ const pendingSave=submit();
+ events.get('visibilitychange')();
+ assert.equal(app.form,null);
+ resolveWrite(Response.json({error:{code:'VERSION_CONFLICT',message:'Reload the latest product.'}},{status:409}));
+ await pendingSave;
+ assert.equal(app.form,null);
+ resolveSession(Response.json({account,isAdmin:true}));
+ sessionResponse=null;writeResponse=null;
+ await settle();
+ assert.equal(app.form,staleForm);
  assert.equal(writes[0].version,1);
  assert.match(staleForm.querySelector('[data-product-status]').textContent,/changed.*reload/i);
  assert.equal(staleForm.values.description,'My draft');
@@ -191,8 +206,18 @@ test('an open editor keeps its version until the admin reloads and reviews the l
  assert.equal(latest.stock,14);
  assert.equal(location.hash,'#/admin/products?sort=stock');
  assert.equal(toast.textContent,'Product saved.');
+ windowEvents.get('hashchange')();
+ const {listingFromApi}=await import('../dist/catalog-client.js');
+ const previewKey='cvm-preview-13m-20261118-v1';
+ localStorage.setItem(previewKey,JSON.stringify({
+  products:[listingFromApi({...latest,available_quantity:2})],settings:{shipping:39},
+  orders:[{id:'CVM-LEGACY-FIXTURE'}]
+ }));
+ windowEvents.get('storage')({key:previewKey});
+ assert.doesNotMatch(localStorage.getItem(previewKey),/CVM-LEGACY-FIXTURE/);
  location.hash='#/admin/products/EDITOR-1?sort=stock';
  windowEvents.get('hashchange')();
+ assert.equal(app.form.values.variantStock,'14');
  const formerEditor=app.form;
  formerEditor.values.description='Prior admin draft';
  account={id:'other-admin',email:'other-admin@example.invalid',name:'Other admin'};

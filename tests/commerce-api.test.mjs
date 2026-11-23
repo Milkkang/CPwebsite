@@ -48,7 +48,7 @@ async function signedRequest(event){
 test('checkout return reports the matched order before and after a signed payment even with an older paid order',async()=>{
  const rows=[
   {stripe_checkout_session_id:'cs_test_old',user_id:userId,order_number:1050,payment_status:'paid'},
-  {stripe_checkout_session_id:'cs_test_current',user_id:userId,order_number:1051,payment_status:'pending'}
+  {id:orderId,stripe_checkout_session_id:'cs_test_current',user_id:userId,order_number:1051,payment_status:'pending'}
  ];
  await mocked(async(url,options)=>{
   const path=new URL(url);
@@ -68,11 +68,11 @@ test('checkout return reports the matched order before and after a signed paymen
   assert.equal(pending.status,200);
   assert.equal(pending.headers.get('Cache-Control'),'no-store');
   const {requestId,...result}=await pending.json();
-  assert.deepEqual(result,{orderNumber:'CVM-1051',paymentStatus:'pending'});
+  assert.deepEqual(result,{orderId,orderNumber:'CVM-1051',paymentStatus:'pending'});
   const event={id:'evt_checkout_return',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_test_current',payment_status:'paid',payment_intent:'pi_test_current',amount_total:1340,currency:'sgd',metadata:{order_id:orderId}}}};
   assert.equal((await worker.fetch(await signedRequest(event),env)).status,200);
   const {requestId:paidRequest,...paid}=await (await call(resultPath)).json();
-  assert.deepEqual(paid,{orderNumber:'CVM-1051',paymentStatus:'paid'});
+  assert.deepEqual(paid,{orderId,orderNumber:'CVM-1051',paymentStatus:'paid'});
  });
 });
 test('a checkout link is unavailable to another account and an expired login can reauthenticate',async()=>{
@@ -138,14 +138,18 @@ test('order details can read one older order in the current account',async()=>{
   const path=new URL(url);
   if(path.pathname.endsWith('/resolve_web_session'))return Response.json({account,isAdmin:false});
   if(path.pathname==='/rest/v1/orders'){
-   if(path.searchParams.get('user_id')!=='eq.'+userId||path.searchParams.get('order_number')!=='eq.1051')return Response.json([]);
-   return Response.json([{order_number:1051,payment_status:'paid',order_items:[]}]);
+   const matches=path.searchParams.get('order_number')==='eq.1051'||path.searchParams.get('id')==='eq.'+orderId;
+   if(path.searchParams.get('user_id')!=='eq.'+userId||!matches||path.searchParams.get('limit')!=='1')return Response.json([]);
+   return Response.json([{id:orderId,order_number:1051,payment_status:'paid',order_items:[]}]);
   }
   throw Error('Unexpected request '+path.pathname);
  },async()=>{
   const response=await call('/api/orders?id=CVM-1051');
   assert.equal(response.status,200);
   assert.deepEqual((await response.json()).orders.map(order=>order.number),['CVM-1051']);
+  const opaque=await call('/api/orders?id='+orderId);
+  assert.equal(opaque.status,200);
+  assert.deepEqual((await opaque.json()).orders.map(order=>order.id),[orderId]);
   assert.deepEqual((await (await call('/api/orders?id=CVM-1053')).json()).orders,[]);
  });
 });

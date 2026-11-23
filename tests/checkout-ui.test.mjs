@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {state} from '../dist/store.js';
 import {card,cart,checkout,confirmation,detail} from '../dist/shop.js';
+const linkedOrderId='44444444-4444-4444-8444-444444444444';
 
 test('guests cannot add products to a browser basket',()=>{
  const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
@@ -47,15 +48,16 @@ test('Stripe return displays the matched order details link only after confirmat
  const pending=confirmation({status:'checking',orderNumber:'CVM-1051'});
  assert.match(pending,/Checking test payment/);
  assert.doesNotMatch(pending,/View order details|payment confirmed/i);
- const paid=confirmation({status:'paid',orderNumber:'CVM-1051'});
+ const paid=confirmation({status:'paid',orderId:linkedOrderId,orderNumber:'CVM-1051'});
  assert.match(paid,/Test payment confirmed/);
  assert.match(paid,/>CVM-1051</);
- assert.match(paid,/href="#\/orders\?id=CVM-1051">View order details</);
+ assert.ok(paid.includes('href="#/orders?id='+linkedOrderId+'">View order details'));
 });
 
 async function openCheckoutReturn(t,hash,fetchHandler){
  t.mock.timers.enable({apis:['setTimeout']});
- const app={innerHTML:'',querySelector:()=>null},documentEvents=new Map(),windowEvents=new Map();
+ const app={html:'',renders:0,get innerHTML(){return this.html;},set innerHTML(html){this.html=html;this.renders++;},querySelector:()=>null};
+ const documentEvents=new Map(),windowEvents=new Map();
  const location=new URL('https://cpvaluemart.com/'+hash);
  const globals={location,history:{replaceState(_state,_title,hash){location.hash=hash;}},
   document:{getElementById:()=>app,addEventListener:(event,fn)=>documentEvents.set(event,fn),body:{classList:{toggle(){}}}},
@@ -74,7 +76,7 @@ async function openCheckoutReturn(t,hash,fetchHandler){
   if(response)return response;
   switch(path){
    case '/api/auth/session': return Response.json({account});
-   case '/api/orders': return Response.json({orders:[{id:'older',number:'CVM-1050',createdAt:'2026-11-20T12:00:00Z',paymentStatus:'paid',items:[]}]});
+   case '/api/orders': return Response.json({orders:[{id:'older',number:'CVM-1050',createdAt:'2026-11-20T12:00:00Z',paymentStatus:'paid',fulfilmentStatus:'Processing',items:[]}]});
    case '/api/shopping': return Response.json({cart:[],saved:[],recent:[]});
    case '/api/traffic': return Response.json({ok:true});
    case '/api/addresses': return Response.json({addresses:[]});
@@ -93,8 +95,8 @@ test('Stripe return waits for this session even when the basket is empty and an 
  const query='session_id=cs_test_current',statusPath='/api/checkout/status?'+query;
  let paymentStatus='pending';
  const {app,paths,location,settle,windowEvents}=await openCheckoutReturn(t,'#/confirmation?'+query,path=>{
-  if(path===statusPath)return Response.json({orderNumber:'CVM-1051',paymentStatus});
-  if(path==='/api/orders?id=CVM-1051')return Response.json({orders:[{id:'current',number:'CVM-1051',
+  if(path===statusPath)return Response.json({orderId:linkedOrderId,orderNumber:'CVM-1051',paymentStatus});
+  if(path==='/api/orders?id='+linkedOrderId)return Response.json({orders:[{id:linkedOrderId,number:'CVM-1051',
    createdAt:'2026-11-20T12:00:00Z',paymentStatus:'paid',fulfilmentStatus:'Processing',total:1340,items:[]}]});
  });
  assert.match(app.innerHTML,/Checking test payment/);
@@ -104,14 +106,54 @@ test('Stripe return waits for this session even when the basket is empty and an 
  t.mock.timers.tick(1000);
  await settle();
  assert.match(app.innerHTML,/Test payment confirmed/);
- const details=app.innerHTML.match(/href="(#\/orders\?id=CVM-1051)">View order details</)?.[1];
- assert.ok(details);
+ const details=app.innerHTML.match(/href="(#[^"]+)">View order details/)?.[1];
+ assert.equal(details,'#/orders?id='+linkedOrderId);
  assert.deepEqual(paths.filter(([path])=>path.startsWith('/api/checkout')),Array(2).fill([statusPath,'GET']));
  location.hash=details;
  windowEvents.get('hashchange')();
  await settle();
  assert.match(app.innerHTML,/<h2>CVM-1051<\/h2>/);
  assert.doesNotMatch(app.innerHTML,/CVM-1050|Order not found/);
+ location.hash='#/orders';
+ windowEvents.get('hashchange')();
+ assert.match(app.innerHTML,/CVM-1050/);
+ assert.doesNotMatch(app.innerHTML,/CVM-1051/);
+});
+
+test('a Stripe detail link shows the exact paid order when purchase history refresh fails',async t=>{
+ const session='session_id=cs_test_staleHistory';
+ const row={id:linkedOrderId,number:'CVM-1051',createdAt:'2026-11-20T12:00:00Z',
+  paymentStatus:'pending',fulfilmentStatus:'Shipped',total:1340,items:[]};
+ let histories=0;
+ const {app,location,settle,windowEvents}=await openCheckoutReturn(t,'#/confirmation?'+session,path=>{
+  if(path==='/api/checkout/status?'+session)return Response.json({orderId:row.id,orderNumber:row.number,paymentStatus:'paid'});
+  if(path==='/api/orders')return ++histories===1?Response.json({orders:[row]}):Response.json({error:{message:'History unavailable.'}},{status:503});
+  if(path==='/api/orders?id='+row.id||path==='/api/orders?id='+row.number)return Response.json({orders:[{...row,paymentStatus:'paid'}]});
+ });
+ assert.match(app.innerHTML,/Test payment confirmed/);
+ location.hash=app.innerHTML.match(/href="(#[^"]+)">View order details/)?.[1];
+ windowEvents.get('hashchange')();
+ await settle();
+ assert.match(app.innerHTML,/Payment status: paid/);
+ assert.equal(location.hash,'#/orders?id='+row.id);
+});
+
+test('incorrect credentials keep the sign-in form and show its error',async t=>{
+ const message='Email or password is incorrect, or the email is not verified.';
+ const {app,documentEvents}=await openCheckoutReturn(t,'#/account',path=>{
+  if(path==='/api/auth/session')return Response.json({account:null,isAdmin:false});
+  if(path==='/api/auth/login')return Response.json({error:{code:'SIGN_IN_FAILED',message}},{status:401});
+ });
+ assert.match(app.innerHTML,/id="auth-login"/);
+ const revision=app.renders,email='login@example.invalid';
+ const status={hidden:true,get isConnected(){return app.renders===revision;}};
+ const button={disabled:false,get isConnected(){return app.renders===revision;}};
+ const form={id:'auth-login',values:{email,password:'incorrect-fixture'},querySelector:()=>status};
+ await documentEvents.get('submit')({target:form,submitter:button,preventDefault(){}});
+ assert.equal(app.renders,revision);
+ assert.equal(form.values.email,email);
+ assert.equal(status.textContent,message);
+ assert.equal(button.disabled,false);
 });
 
 test('Stripe return can retry a request failure or a timed out check for the same session',async t=>{

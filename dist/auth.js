@@ -28,7 +28,9 @@ export async function authRequest(path,data,{signal}={}) {
  if(!r.ok){
   const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;
   if(generation===authGeneration&&path!=='/api/auth/session'){
-   if(r.status===401){clearTimeout(expiryTimer);changeSession({...signedOut,loading:false,error:''});}
+   if(r.status===401&&['SIGN_IN_REQUIRED','SESSION_EXPIRED'].includes(error.code)){
+    clearTimeout(expiryTimer);changeSession({...signedOut,loading:false,error:''});
+   }
    else if(error.code==='ADMIN_REQUIRED'&&auth.isAdmin)changeSession({isAdmin:false});
    else if(error.code==='PASSWORD_RESET_REQUIRED'&&!auth.recoveryOnly)changeSession({isAdmin:false,recoveryOnly:true});
   }
