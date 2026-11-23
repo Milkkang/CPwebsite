@@ -30,7 +30,7 @@ function template(job){
  if(!content)throw Error('UNKNOWN_EMAIL_KIND');
  const [title,...details]=content;
  const notice='This update is for a simulated order. No funds were transferred.';
- const subject='CP Value Mart · '+title+(number?' · '+number:'')+' (simulated)';
+ const subject='CP Value Mart · '+title+(number?' · '+number:'');
  const lines=details.filter(Boolean);
  return {
   subject,

@@ -2,7 +2,7 @@ import {productFileCsv} from './import-file.js';
 import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
 import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
-import {adminPage,canShipOrder,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
+import {adminPage,canShipOrder,canDeliverOrder,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
 import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
 
 const app=document.getElementById('app'), toast=document.getElementById('toast'), modal=document.getElementById('dialog');
@@ -359,7 +359,7 @@ function updateOrderSelection(input) {
   selectPage.checked=count===checkboxes.length;
   selectPage.indeterminate=count>0&&count<checkboxes.length;
   app.querySelector('[data-order-selection]').textContent=count+' selected';
-  app.querySelector('[data-open-bulk-ship]').disabled=count===0;
+  app.querySelector('[data-open-bulk-order]').disabled=count===0;
 }
 
 document.addEventListener('submit', async event=>{
@@ -377,7 +377,7 @@ document.addEventListener('submit', async event=>{
       if(form.id==='auth-login'&&!admin)returnAfterSignIn(form.dataset.next??'');
       else if(form.id==='auth-password'){navigate(admin?'/admin':'/account');message(result.message);}
       else if(form.id==='auth-verify'){navigate('/account');message(result.recoveryOnly?'Choose your new password.':'Email verified. Sign in with your password.');}
-      else if(form.id==='auth-profile')message('Name saved.');
+      else if(form.id==='auth-profile')message('Account details saved.');
       else if(form.id==='auth-address')message('Address saved.');
       else if(status){status.hidden=false;status.textContent=result.message;}
       if(['auth-signup','auth-recover','auth-resend'].includes(form.id))form.querySelectorAll('input[type=password]').forEach(input=>input.value='');
@@ -385,29 +385,33 @@ document.addEventListener('submit', async event=>{
     finally {if(button?.isConnected)button.disabled=false;}
     return;
   }
-  if(form.id==='bulk-ship-form'){
+  if(form.id==='bulk-order-form'){
+    const shipping=form.dataset.action==='ship';
     const owner=auth.account?.id;
     const button=form.querySelector('button[type=submit]');
     if(button.disabled)return;
-    const orders=[...form.querySelectorAll('[data-ship-version]')].map(input=>({
-      orderId:input.name,version:Number(input.dataset.shipVersion),tracking:input.value.trim()
+    const orders=[...form.querySelectorAll('[data-order-version]')].map(input=>({
+      orderId:input.name,version:Number(input.dataset.orderVersion),...(shipping?{tracking:input.value.trim()}:{})
     }));
-    if(orders.some(order=>!order.tracking)){message('Enter a tracking number for each order.');return;}
+    if(shipping&&orders.some(order=>!order.tracking)){message('Enter a tracking number for each order.');return;}
     button.disabled=true;
     try{
-      const result=await authRequest('/api/admin/orders/bulk-ship',{orders});
+      const result=await authRequest('/api/admin/orders/bulk-'+(shipping?'ship':'deliver'),{orders});
       if(owner!==auth.account?.id||!auth.isAdmin)return;
       if(modal.contains(form))modal.close();
       adminProductsLoaded=false;
       await loadAdminProducts();
-      if(owner===auth.account?.id&&auth.isAdmin)message(result.shipped+(result.shipped===1?' order shipped.':' orders shipped.'));
+      const count=shipping?result.shipped:result.delivered;
+      if(owner===auth.account?.id&&auth.isAdmin)message(count+(count===1?' order':' orders')+(shipping?' shipped.':' marked as delivered.'));
     }catch(problem){
       if(owner!==auth.account?.id||!auth.isAdmin)return;
       if(problem.code==='VERSION_CONFLICT'){
         adminProductsLoaded=false;
         await loadAdminProducts();
       }
-      if(owner===auth.account?.id&&auth.isAdmin&&modal.contains(form))message(problem.message);
+      if(owner!==auth.account?.id||!auth.isAdmin||!modal.contains(form))return;
+      if(problem.code==='VERSION_CONFLICT')modal.close();
+      message(problem.message);
     }finally{button.disabled=false;}
     return;
   }
@@ -509,15 +513,22 @@ document.addEventListener('click', async event=>{
   if('retryCatalog'in data){storefront={key:'',data:null,error:null};pendingStorefront='';render();return;}
   if('defaultAddress'in data){if(button.disabled)return;button.disabled=true;try{await authRequest('/api/addresses/'+data.defaultAddress,{action:'default'});await loadAddresses();message('Default delivery address saved.');}catch(error){button.disabled=false;message(error.message);}return;}
   if('deleteAddress'in data){try{await authRequest('/api/addresses/'+data.deleteAddress,{action:'delete'});await loadAddresses();}catch(error){message(error.message);}return;}
-  if('openBulkShip' in data){
+  if('openBulkOrder' in data){
+    const shipping=data.openBulkOrder==='ship';
     const selected=new Set([...app.querySelectorAll('[data-select-order]:checked')].map(input=>input.value));
-    const orders=state.orders.filter(order=>selected.has(order.backendId)&&canShipOrder(order));
+    const eligible=shipping?canShipOrder:canDeliverOrder;
+    const orders=state.orders.filter(order=>selected.has(order.backendId)&&eligible(order));
     if(!orders.length)return;
-    showModal('<form id="bulk-ship-form" class="form-stack"><h2 id="dialog-title">Ship '+orders.length+
-      (orders.length===1?' order':' orders')+'</h2>'+orders.map(order=>
-        '<label>'+e(order.id)+' tracking number<input name="'+e(order.backendId)+'" data-ship-version="'+e(order.version)+
-        '" value="'+e(order.tracking)+'" maxlength="50" autocomplete="off" required></label>'
-      ).join('')+'<button type="submit" class="btn primary">Mark as shipped</button></form>');
+    const fields=orders.map(order=>{
+      const field=' name="'+e(order.backendId)+'" data-order-version="'+e(order.version)+'"';
+      return shipping?'<label>'+e(order.id)+' tracking number<input'+field+
+        ' value="'+e(order.tracking)+'" maxlength="120" autocomplete="off" required></label>':
+        '<li>'+e(order.id)+'<input type="hidden"'+field+'></li>';
+    }).join('');
+    const action=shipping?'Mark as shipped':'Mark as delivered';
+    showModal('<form id="bulk-order-form" data-action="'+(shipping?'ship':'deliver')+'" class="form-stack"><h2 id="dialog-title">'+
+      action+'</h2>'+(shipping?fields:'<ul>'+fields+'</ul>')+'<button type="submit" class="btn primary">'+action+'</button></form>');
+    if(!shipping)modal.querySelector('button[type=submit]').focus();
     return;
   }
   if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
@@ -622,6 +633,10 @@ document.addEventListener('input',event=>{
 document.addEventListener('change',async event=>{
   const input=event.target;
   if('selectOrder' in input.dataset||'selectPageOrders' in input.dataset){updateOrderSelection(input);return;}
+  if(input.form?.id==='checkout-form'&&input.name==='addressId'){
+    for(const card of input.form.querySelectorAll('[data-checkout-address]'))card.hidden=card.dataset.checkoutAddress!==input.value;
+    return;
+  }
   if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
   if(input.dataset.inline) {
     const row=getVariant(input.dataset.sku);

@@ -51,6 +51,7 @@ async function createSession(request,env){
  if(!created.ok||!created.data?.id)throw new ApiError(409,created.data?.message==='ADDRESS_INVALID'?'ADDRESS_INVALID':'CART_CHANGED','Your basket, coupon or address changed. Refresh and try again.');
  const order=created.data;
  const form=new URLSearchParams({mode:'payment',success_url:'https://cpvaluemart.com/#/confirmation?session_id={CHECKOUT_SESSION_ID}',cancel_url:'https://cpvaluemart.com/#/checkout?cancelled=1',client_reference_id:order.id,
+  customer_email:who.account.checkoutEmail||who.account.email,
   'metadata[order_id]':order.id,'payment_intent_data[metadata][order_id]':order.id,
   'line_items[0][price_data][currency]':'sgd','line_items[0][price_data][unit_amount]':String(order.total_cents),
   'line_items[0][price_data][product_data][name]':'CP Value Mart · Simulated order '+order.number,'line_items[0][quantity]':'1',
@@ -89,7 +90,7 @@ async function webhook(request,env){
  if(!applied.ok)throw new ApiError(409,'PAYMENT_EVENT_REJECTED','Payment event was rejected.');
  return {status:200,data:{received:true}};
 }
-export const commerceRoute=path=>path==='/api/checkout/session'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/orders'||path==='/api/admin/orders/bulk-ship'||path==='/api/admin/order-actions';
+export const commerceRoute=path=>path==='/api/checkout/session'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/orders'||path==='/api/admin/orders/bulk-ship'||path==='/api/admin/orders/bulk-deliver'||path==='/api/admin/order-actions';
 export async function handleCommerce(request,env){
  const path=new URL(request.url).pathname;
  if(path==='/api/stripe/webhook'){
@@ -139,7 +140,8 @@ export async function handleCommerce(request,env){
   }
   return {status:200,data:{ok:true,testMode:true}};
  }
- if(path==='/api/admin/orders/bulk-ship'){
+ if(path==='/api/admin/orders/bulk-ship'||path==='/api/admin/orders/bulk-deliver'){
+  const shipping=path.endsWith('bulk-ship');
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
   originGuard(request);
   const who=await identity(request,env);
@@ -147,20 +149,20 @@ export async function handleCommerce(request,env){
   const {orders}=await bodyJSON(request,96*1024);
   if(!Array.isArray(orders)||orders.length<1||orders.length>100||orders.some(order=>
    !order||typeof order.orderId!=='string'||!orderUuid.test(order.orderId)||!Number.isInteger(order.version)||
-   order.version<1||order.version>2147483647||typeof order.tracking!=='string'||!order.tracking.trim()||
-   order.tracking.length>120||/[\x00-\x1f\x7f]/.test(order.tracking)
+   order.version<1||order.version>2147483647||shipping&&(typeof order.tracking!=='string'||!order.tracking.trim()||
+   order.tracking.length>120||/[\x00-\x1f\x7f]/.test(order.tracking))
   )||new Set(orders.map(order=>order.orderId.toLowerCase())).size!==orders.length){
-   throw new ApiError(400,'INVALID_INPUT','Select up to 100 distinct orders and enter a tracking number for each.');
+   throw new ApiError(400,'INVALID_INPUT',shipping?'Select up to 100 distinct orders and enter a tracking number for each.':'Select up to 100 distinct shipped orders.');
   }
-  const changed=await db(env,'rpc/admin_bulk_ship_orders',{method:'POST',body:{
-   p_actor:who.account.id,p_orders:orders.map(order=>({id:order.orderId,version:order.version,tracking:order.tracking.trim()}))
+  const changed=await db(env,shipping?'rpc/admin_bulk_ship_orders':'rpc/admin_bulk_deliver_orders',{method:'POST',body:{
+   p_actor:who.account.id,p_orders:orders.map(order=>({id:order.orderId,version:order.version,...(shipping?{tracking:order.tracking.trim()}:{})}))
   },allowFailure:true});
   if(!changed.ok){
-   if(changed.data?.code==='40001')throw new ApiError(409,'VERSION_CONFLICT','An order changed. Reopen Ship selected after selecting the latest orders.');
+   if(changed.data?.code==='40001')throw new ApiError(409,'VERSION_CONFLICT','An order changed. Select the latest orders and try again.');
    if(changed.data?.code==='42501')throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
-   throw new ApiError(503,'SHIPMENT_UNAVAILABLE','Could not confirm shipment. Refresh the order list before trying again.');
+   throw new ApiError(503,shipping?'SHIPMENT_UNAVAILABLE':'DELIVERY_UNAVAILABLE','Could not update the orders. Refresh the order list before trying again.');
   }
-  return {status:200,data:{shipped:changed.data}};
+  return {status:200,data:{[shipping?'shipped':'delivered']:changed.data}};
  }
  if(path==='/api/admin/orders'){
   if(!['GET','POST'].includes(request.method))throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');

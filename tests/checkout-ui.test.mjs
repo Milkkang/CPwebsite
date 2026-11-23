@@ -36,13 +36,14 @@ test('guests are sent to sign in instead of saving items locally',async()=>{
 
 test('only approved accounts see a checkout form with a no-charge notice',()=>{
  const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
- state.account={id:'test',email:'buyer@example.invalid',name:'Buyer'};
+ state.account={id:'test',email:'buyer@example.invalid',name:'Buyer',checkoutEmail:'pay@example.invalid'};
  state.cart={[product.id]:product.variants[0].min};
  assert.match(checkout([],false),/Online ordering is currently unavailable/);
  assert.doesNotMatch(checkout([],false),/checkout-form|Continue to Stripe/);
  assert.match(checkout([],null),/Checking availability/);
- const html=checkout([{id:'88888888-8888-4888-8888-888888888888',full_name:'Buyer',address_line:'Saved address',postal_code:'000001',is_default:true}],true);
+ const html=checkout([{id:'88888888-8888-4888-8888-888888888888',full_name:'Buyer',address_line:'1 Example Road\n#03-04',postal_code:'000001',is_default:true}],true);
  assert.match(html,/This order is simulated. You will not be charged/);assert.match(html,/Continue to Stripe/);assert.match(html,/name="addressId"/);
+ assert.match(html,/<strong>Buyer<\/strong><span>pay@example\.invalid<\/span><span>1 Example Road<\/span><span>#03-04<\/span><span>Singapore 000001<\/span>/);
  assert.doesNotMatch(html,/name="address"/);assert.doesNotMatch(html,/card number/i);
 });
 

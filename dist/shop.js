@@ -180,7 +180,21 @@ export function checkout(addresses,availability=false) {
   if(!rows.length)return crumb('Checkout')+empty('Your basket is empty','Add a product before starting checkout.',go('/shop','Continue shopping','btn primary'));
   if(addresses===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Loading delivery addresses…</p></section>';
   if(!addresses.length)return crumb('Checkout')+empty('Add a delivery address','Save a Singapore delivery address in your account before checkout.',go('/account','Open my account','btn primary'));
-  return crumb('Checkout')+'<div class="page-title"><h1>Checkout preview</h1><p>This order is simulated. You will not be charged.</p></div><div class="two-col"><form id="checkout-form" class="panel form-stack"><h2>Delivery address</h2><label>Saved address<select name="addressId" required>'+addresses.map(address=>'<option value="'+e(address.id)+'"'+(address.is_default?' selected':'')+'>'+e(address.full_name)+' · '+e(address.address_line)+' · Singapore '+e(address.postal_code)+'</option>').join('')+'</select></label><p class="notice">Use the sample card details provided for this checkout. Do not enter a real card.</p><button class="btn primary">Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
+  const selected=addresses.find(address=>address.is_default)??addresses[0];
+  const email=state.account.checkoutEmail||state.account.email;
+  const cards=addresses.map(address=>{
+    const lines=String(address.address_line??'').split(/\r?\n|,\s*/).map(line=>line.trim()).filter(Boolean);
+    return '<div class="checkout-address-lines" data-checkout-address="'+e(address.id)+'"'+(address===selected?'':' hidden')+
+      '><strong>'+e(address.full_name)+'</strong><span>'+e(email)+'</span>'+
+      lines.map(line=>'<span>'+e(line)+'</span>').join('')+'<span>Singapore '+e(address.postal_code)+'</span></div>';
+  }).join('');
+  return crumb('Checkout')+'<div class="page-title"><h1>Checkout preview</h1><p>This order is simulated. You will not be charged.</p></div>'+
+    '<div class="two-col"><form id="checkout-form" class="panel form-stack"><h2>Delivery address</h2><label>Saved address<select name="addressId" required>'+
+    addresses.map(address=>'<option value="'+e(address.id)+'"'+(address===selected?' selected':'')+'>'+
+      e(address.full_name)+' · '+e(address.address_line.replace(/\s+/g,' '))+' · Singapore '+e(address.postal_code)+'</option>').join('')+
+    '</select></label><div aria-live="polite">'+cards+'</div>'+
+    '<p class="notice">Use the sample card details provided for this checkout. Do not enter a real card.</p>'+
+    '<button class="btn primary">Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
 }
 function accountSignIn(next='') {
   return '<section class="panel narrow"><h2>Sign in to your account</h2>'+link(href('/account',{next}),'Sign in','btn primary')+'</section>';

@@ -130,6 +130,7 @@ function listPagination(path,params,paging,total,noun){
 }
 const orderStages=[['to-ship','To Ship'],['Shipped','Shipped'],['Delivered','Completed'],['Cancelled','Cancelled'],['Refunded','Refund']];
 export const canShipOrder=order=>order.status==='Processing'&&order.paymentStatus==='paid';
+export const canDeliverOrder=order=>order.status==='Shipped'&&order.paymentStatus==='paid';
 function orderStage(order){
  if(order.paymentStatus==='refunded')return 'Refunded';
  return canShipOrder(order)?'to-ship':order.status;
@@ -153,7 +154,9 @@ function ordersPage(params){
  const pagination=listPagination('/admin/orders',params,paging,rows.length,'Orders');
  const {page:ignoredPage,origin:ignoredOrigin,status:ignoredStatus,...stageFilters}=Object.fromEntries(params);
  const stageLink=stage=>e(href('/admin/orders',stage?{...stageFilters,status:stage}:stageFilters));
- const canSelect=groups.some(g=>g.orders.some(o=>o.backendId&&canShipOrder(o)));
+ const delivering=status==='Shipped';
+ const eligible=delivering?canDeliverOrder:canShipOrder;
+ const canSelect=groups.some(g=>g.orders.some(o=>o.backendId&&eligible(o)));
  return heading('Orders',rows.length+' orders · Singapore time · Simulated payments','<button class="btn outline" data-export="orders">Export all orders</button>')+
   '<nav class="order-stages" aria-label="Order status">'+orderStages.map(([stage,label])=>
    '<a href="'+stageLink(stage)+'"'+(status===stage?' aria-current="true"':'')+'><strong>'+(counts.get(stage)??0)+'</strong><span>'+label+'</span></a>'
@@ -164,9 +167,9 @@ function ordersPage(params){
   '<label>Group by<select name="group">'+[['day','Day'],['week','Week'],['month','Month'],['quarter','Quarter'],['year','Year']].map(([key,label])=>'<option value="'+key+'"'+selected(key,group)+'>'+label+'</option>').join('')+'</select></label>'+
   '<label>Sort<select name="sort"><option value="newest"'+selected(sort,'newest')+'>Newest first</option><option value="oldest"'+selected(sort,'oldest')+'>Oldest first</option></select></label>'+
   pageSize(paging.size,'Orders per page')+'<button class="btn outline">Filter</button>'+(status?'<a class="btn outline" href="'+stageLink('')+'">All orders</a>':'')+'</form>'+(dateError?'<p class="notice" role="status">'+e(dateError)+' Showing all dates.</p>':'')+
-  (canSelect?'<div class="order-bulk-toolbar"><label class="check-label"><input type="checkbox" data-select-page-orders> Select all on this page</label><span class="subtle" data-order-selection role="status">0 selected</span><button type="button" class="btn primary" data-open-bulk-ship disabled>Ship selected</button></div>':'')+
+  (canSelect?'<div class="order-bulk-toolbar"><label class="check-label"><input type="checkbox" data-select-page-orders> Select all on this page</label><span class="subtle" data-order-selection role="status">0 selected</span><button type="button" class="btn primary" data-open-bulk-order="'+(delivering?'deliver':'ship')+'" disabled>'+(delivering?'Mark selected as delivered':'Ship selected')+'</button></div>':'')+
   '<div class="button-row order-group-actions"><button type="button" class="btn outline small" data-order-groups="expand">Expand all</button><button type="button" class="btn outline small" data-order-groups="collapse">Collapse all</button></div>'+pagination+
-  (groups.length?groups.map(g=>'<details class="order-date-group" open><summary>'+e(g.label)+' <span class="subtle">'+g.orders.length+(g.orders.length===1?' order':' orders')+' on this page</span></summary>'+ordersTable(g.orders,filters,canSelect)+'</details>').join(''):empty('No matching orders','Adjust or clear the filters.'))+pagination;
+  (groups.length?groups.map(g=>'<details class="order-date-group" open><summary>'+e(g.label)+' <span class="subtle">'+g.orders.length+(g.orders.length===1?' order':' orders')+' on this page</span></summary>'+ordersTable(g.orders,filters,canSelect?eligible:null)+'</details>').join(''):empty('No matching orders','Adjust or clear the filters.'))+pagination;
 }
 function productList(params) {
   const q=params.get('q')??'', status=params.get('status')??'', low=params.get('low')==='1';
@@ -245,11 +248,11 @@ export function productEditor(id,params=new URLSearchParams()) {
     '<section class="panel form-stack"><div class="section-title"><h2>Listing, stock and price</h2></div><p class="subtle">Each SKU is one listing. Enter the same SKU in both fields.</p><div id="variant-fields">'+(p.variants.length?p.variants:[{name:'',sku:'',price:0,stock:0,min:1,image:''}]).slice(0,1).map((v,i)=>variantFields(v,i,p,false)).join('')+'</div></section>'+
     '<div class="button-row"><button class="btn primary">Save product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
 }
-function ordersTable(rows,filters,canSelect) {
+function ordersTable(rows,filters,eligible) {
   const headers=['Order','Customer','Products','Date','Status','Total',''];
-  if(canSelect)headers.unshift('Select');
+  if(eligible)headers.unshift('Select');
   return table(headers,rows.map(o=>'<tr>'+
-    (canSelect?'<td>'+(o.backendId&&canShipOrder(o)?'<input type="checkbox" data-select-order value="'+e(o.backendId)+'" aria-label="Select '+e(o.id)+'">':'')+'</td>':'')+
+    (eligible?'<td>'+(o.backendId&&eligible(o)?'<input type="checkbox" data-select-order value="'+e(o.backendId)+'" aria-label="Select '+e(o.id)+'">':'')+'</td>':'')+
     '<td><b>'+e(o.id)+'</b></td><td>'+e(o.name)+'</td><td>'+orderItemsPreview(o.items)+'</td><td>'+e(o.date)+'</td><td>'+badge(o.paymentStatus==='refunded'?'Refunded':o.status)+'</td><td>'+cash(o.totals.total)+'</td><td>'+link(href('/admin/orders/'+o.id,filters),'Open ↗','text-link')+'</td></tr>').join(''));
 }
 function orderEditor(id,params) {

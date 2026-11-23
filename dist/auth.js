@@ -68,10 +68,21 @@ export function adminGate(params) {
  return '<main class="wrap admin-auth" id="main"><section class="panel narrow form-stack">'+
   '<a class="logo" href="#/"><span class="mark" aria-hidden="true"></span><span>CP Value Mart</span></a>'+body+'</section></main>';
 }
-export function profilePanel(){return '<section class="panel"><h2>Account details</h2><form id="auth-profile" class="form-stack"><label>Name<input name="name" value="'+e(auth.account?.name)+'" required maxlength="80" autocomplete="name"></label><button class="btn outline">Save name</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
+export function profilePanel(){return '<section class="panel"><h2>Account details</h2><form id="auth-profile" class="form-stack"><label>Name<input name="name" value="'+e(auth.account?.name)+'" required maxlength="80" autocomplete="name"></label><label>Checkout email<input type="email" name="checkoutEmail" value="'+e(auth.account?.checkoutEmail??'')+'" maxlength="254" autocomplete="email" aria-describedby="checkout-email-help"></label><p id="checkout-email-help" class="subtle">Leave blank to use your sign-in email. This address is filled in automatically on Stripe.</p><button class="btn outline">Save account details</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
 export function passwordPanel(){return '<section class="panel"><h2>Change password</h2><p>After saving, sign in again with your new password.</p><form id="auth-password" class="form-stack">'+input('Current password','currentPassword','password','autocomplete="current-password" maxlength="128"')+input('New password','password','password','autocomplete="new-password" minlength="12" maxlength="128"')+input('Confirm new password','confirmPassword','password','autocomplete="new-password" minlength="12" maxlength="128"')+'<button class="btn primary">Save password</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
 let addresses=null,addressError='',addressOwner='';
-export async function loadAddresses(){try{addresses=(await authRequest('/api/addresses')).addresses;addressError='';addressOwner=auth.account?.id;}catch(error){addresses=[];addressError=error.message;}onAuthChange();}
+export async function loadAddresses(){
+ const owner=auth.account?.id;
+ try{
+  const result=await authRequest('/api/addresses');
+  if(owner!==auth.account?.id)return;
+  addresses=result.addresses;addressError='';
+ }catch(error){
+  if(owner!==auth.account?.id)return;
+  addresses=[];addressError=error.message;
+ }
+ addressOwner=owner;onAuthChange();
+}
 export function deliveryAddresses(){
  if(addressOwner!==auth.account?.id)return null;
  return addresses;
@@ -79,5 +90,5 @@ export function deliveryAddresses(){
 export function addressesPanel(){
  if(addressOwner!==auth.account?.id){addresses=null;addressOwner=auth.account?.id;}
  if(addresses===null){addresses=[];queueMicrotask(loadAddresses);}
- return '<section class="panel"><h2>Delivery addresses</h2><p>Your default address is shown first. Select Set default on another address to change it.</p><div role="status">'+e(addressError)+'</div><div class="account-address-list">'+(addresses.length?addresses.map(a=>'<article class="panel address-card"><div class="address-heading"><h3>'+e(a.full_name)+'</h3>'+(a.is_default?'<strong class="badge status-published">Default</strong>':'<button class="btn outline address-default" data-default-address="'+e(a.id)+'" aria-label="Set address for '+e(a.full_name)+' as default">Set default</button>')+'</div><p>'+e(a.address_line)+'<br>Singapore '+e(a.postal_code)+'</p><button class="btn outline" data-delete-address="'+e(a.id)+'">Remove address</button></article>').join(''):'<p class="subtle">No delivery addresses saved yet.</p>')+'</div><details class="add-address"><summary class="text-link">Add address</summary><form id="auth-address" class="form-stack">'+input('Full name','name','text','maxlength="80" autocomplete="name"')+input('Address and unit','address','text','maxlength="200" autocomplete="street-address"')+input('Singapore postal code','postal','text','pattern="[0-9]{6}" inputmode="numeric" maxlength="6" autocomplete="postal-code"')+'<button class="btn primary">Save address</button><p data-auth-status role="status" class="notice" hidden></p></form></details></section>';
+ return '<section class="panel"><h2>Delivery addresses</h2><p>Your default address is shown first. Select Set default on another address to change it.</p><div role="status">'+e(addressError)+'</div><div class="account-address-list">'+(addresses.length?addresses.map(a=>'<article class="panel address-card"><div class="address-heading"><h3>'+e(a.full_name)+'</h3>'+(a.is_default?'<strong class="badge status-published">Default</strong>':'<button class="btn outline address-default" data-default-address="'+e(a.id)+'" aria-label="Set address for '+e(a.full_name)+' as default">Set default</button>')+'</div><p class="address-text">'+e(a.address_line)+'<br>Singapore '+e(a.postal_code)+'</p><button class="btn outline" data-delete-address="'+e(a.id)+'">Remove address</button></article>').join(''):'<p class="subtle">No delivery addresses saved yet.</p>')+'</div><details class="add-address"><summary class="text-link">Add address</summary><form id="auth-address" class="form-stack">'+input('Full name','name','text','maxlength="80" autocomplete="name"')+'<label>Street address and unit<textarea name="address" rows="2" maxlength="200" autocomplete="street-address" aria-describedby="address-lines-help" required></textarea></label><p id="address-lines-help" class="subtle">Enter the unit number on its own line, if applicable.</p>'+input('Singapore postal code','postal','text','pattern="[0-9]{6}" inputmode="numeric" maxlength="6" autocomplete="postal-code"')+'<button class="btn primary">Save address</button><p data-auth-status role="status" class="notice" hidden></p></form></details></section>';
 }

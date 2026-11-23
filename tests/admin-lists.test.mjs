@@ -47,12 +47,17 @@ test('date filtering and monthly test sales exclude cancelled and unpaid orders'
  const old=state.orders;
  try{
   state.orders=[
-   {id:'CVM-1',date:'2026-11-20',createdAt:'2026-11-20T02:00:00Z',name:'QA',email:'qa@example.invalid',status:'Shipped',paymentStatus:'paid',items:[],totals:{total:1250}},
+   {id:'CVM-1',backendId:'shipment-1',date:'2026-11-20',createdAt:'2026-11-20T02:00:00Z',name:'QA',email:'qa@example.invalid',status:'Shipped',paymentStatus:'paid',items:[],totals:{total:1250}},
    {id:'CVM-2',date:'2026-11-20',createdAt:'2026-11-20T01:00:00Z',name:'QA',email:'qa@example.invalid',status:'Cancelled',paymentStatus:'paid',items:[],totals:{total:2000}},
    {id:'CVM-3',date:'2026-10-19',createdAt:'2026-10-19T01:00:00Z',name:'QA',email:'qa@example.invalid',status:'Processing',paymentStatus:'pending',items:[],totals:{total:3000}}
   ];
   const orders=adminPage('orders',undefined,new URLSearchParams('from=2026-11-20&to=2026-11-20'));
   assert.match(orders,/Showing 1–2 of 2 orders/);assert.doesNotMatch(orders,/CVM-3/);
+  const shipped=adminPage('orders',undefined,new URLSearchParams('status=Shipped'));
+  assert.match(shipped,/data-open-bulk-order="deliver"/);
+  assert.match(shipped,/Mark selected as delivered/);
+  assert.match(shipped,/data-select-order value="shipment-1"/);
+  assert.doesNotMatch(shipped,/data-open-bulk-order="ship"/);
   const revenue=adminPage('revenue',undefined,new URLSearchParams('year=2026'));
   assert.equal((revenue.match(/class="sales-month"/g)||[]).length,12);
   assert.match(revenue,/1 simulated order · S\$12\.50/);
