@@ -54,3 +54,36 @@ test('webhook verifies its signature, rejects live events and forwards only serv
   assert.equal((await worker.fetch(await signedRequest({...event,id:'evt_live',livemode:true}),env)).status,400);
  });
 });
+
+test('bulk shipping checks admin access and submits distinct orders in a single RPC',async()=>{
+ const path='/api/admin/orders/bulk-ship';
+ const orders=[
+  {orderId,version:3,tracking:' COURIER-1 '},
+  {orderId:addressId,version:4,tracking:'COURIER-2'}
+ ];
+ let isAdmin=false,conflict=false,calls=0;
+ await mocked(async(url,options)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin});
+  assert.match(String(url),/\/rpc\/admin_bulk_ship_orders$/);
+  calls++;
+  assert.deepEqual(JSON.parse(options.body),{p_actor:userId,p_orders:[
+   {id:orderId,version:3,tracking:'COURIER-1'},{id:addressId,version:4,tracking:'COURIER-2'}
+  ]});
+  return conflict?Response.json({code:'40001'},{status:400}):Response.json(2);
+ },async()=>{
+  assert.equal((await call(path,{orders})).status,403);
+  isAdmin=true;
+  assert.equal((await call(path,{orders},{origin:'https://example.invalid'})).status,403);
+  assert.equal((await call(path,{orders:[orders[0],orders[0]]})).status,400);
+  assert.equal((await call(path,{orders:[{...orders[0],tracking:' '}]})).status,400);
+  assert.equal(calls,0);
+  const success=await call(path,{orders});
+  assert.equal(success.status,200);
+  assert.equal((await success.json()).shipped,2);
+  conflict=true;
+  const stale=await call(path,{orders});
+  assert.equal(stale.status,409);
+  assert.equal((await stale.json()).error.code,'VERSION_CONFLICT');
+  assert.equal(calls,2);
+ });
+});

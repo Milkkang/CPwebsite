@@ -519,5 +519,17 @@ button.photo:disabled {opacity:1;cursor:default}
 @media(max-width:750px){.admin-layout,.two-col{grid-template-columns:minmax(0,1fr)}.admin-main,.admin-nav,.two-col>*{min-width:0}.order-display p{overflow-wrap:anywhere}}
 
 .order-group-actions{margin:16px 0}.order-date-group{margin:16px 0}.order-date-group>summary{cursor:pointer;padding:14px 0;font-weight:750}.order-date-group>summary .subtle{margin-left:12px;font-weight:400}.order-date-group .table-wrap{margin-top:4px}
+.order-stages {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:18px}
+.order-stages a {display:grid;justify-items:center;align-content:center;gap:4px;min-height:82px;padding:8px 2px;text-align:center;font-size:clamp(.66rem,2.5vw,.88rem);border-bottom:3px solid transparent}
+.order-stages a:first-child {border-radius:13px 0 0 13px}
+.order-stages a:last-child {border-radius:0 13px 13px 0}
+.order-stages a + a {border-left:1px solid var(--line)}
+.order-stages a:hover,.order-stages a[aria-current] {background:#edf5ec;color:var(--green-dark)}
+.order-stages a[aria-current] {border-bottom-color:var(--green)}
+.order-stages strong {font-size:clamp(1.15rem,4vw,1.7rem);font-variant-numeric:tabular-nums}
+.order-bulk-toolbar {display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.order-bulk-toolbar button {margin-left:auto}
+.order-bulk-toolbar button:disabled {opacity:.55;cursor:default}
+[data-select-order],[data-select-page-orders] {width:18px;height:18px;accent-color:var(--green);cursor:pointer}
 
 .sales-month{border:1px solid var(--line,#dce6dc);border-radius:14px;background:#fff;margin:12px 0;padding:0 18px}.sales-month>summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 0}.sales-month>summary span{color:#526359}.sales-month .table-wrap{margin:0 0 16px}.sales-month>p{padding:0 0 14px}
