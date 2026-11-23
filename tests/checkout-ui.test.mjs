@@ -72,3 +72,13 @@ test('public storefront copy removes preview wording and directs enquiries to cu
  assert.match(html,/mailto:hello@cpvaluemart\.com/);
  assert.doesNotMatch(html,/contact-form/);
 });
+
+test('public page metadata uses storefront copy and starts without sample promotions',async()=>{
+ for(const file of ['index.html','404.html']){
+  const html=await readFile(new URL('../dist/'+file,import.meta.url),'utf8');
+  const description=html.match(/<meta name="description" content="([^"]+)"/)?.[1];
+  assert.match(description,/CP Value Mart in Singapore/);
+  assert.doesNotMatch(description,/\b(test|demo|sandbox|preview)\b/i);
+ }
+ assert.deepEqual(state.coupons,[]);
+});

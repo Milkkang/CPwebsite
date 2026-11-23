@@ -1,15 +1,16 @@
 # CPwebsite Status
 
-Current Phase: Phase 8 已完成内部验收，正式交付完成；未伪造逐 Phase 人工批准。
-Completed:
-- 自主工作流迁移完成；核心规则 70 行、单一 STATUS，取消强制 PR、逐阶段暂停和重复 Handoff。
-- 顾客端、管理员后台、API、Supabase、R2、Resend 队列/回调及 Stripe sandbox 实现和适用验收完成。
-- 58 项应用测试、3 项真实 Worker runtime、隔离 PostgreSQL 全迁移/并发/故障恢复通过；全部 678 张公开 R2 图片核验通过。
-- 真实 QA 测试付款/签名 webhook、履约追踪、收货、退款/重放、取消/重放及库存恢复通过。
-- QA 商品下架、优惠券停用，临时管理员和结账权限已撤销，现有会话实时拒绝检查通过；原始订单/库存/邮件审计完整保留。
-- GitHub CI 44707639113、既有 Pages 构建和 Cloudflare 正式构建均成功；正式域名最终冒烟检查通过。
-In Progress: 无。
-Blockers: 无生产交付阻塞。Preview 独立 Stripe 配置缺失及既有密码泄露保护提示详见 final-acceptance.md。
-Latest Verified Commit: ac0c1dfc28b13dad7aa3d537568305c11b07cc34（与本地验收代码文件树完全一致）；GitHub CI 通过，正式域名最终验证通过。
-Next: 后续普通开发从安全分支 dev/autonomous 按 Inspect → Implement → Test → Fix → Verify → Commit → Continue 推进；按需读取相关资料。
-Final Delivery: https://cpvaluemart.com Production Live；所有付款始终 Test Mode，测试结账受控；无需新增人工授权。
+## 2026-11-23 生产站与正式收款
+
+- 生产站已开放浏览、账户和购物篮。PR #32 已部署，包含批量确认送达、结账邮箱、订单邮件和后台文案更新。注册验证与密码重置模板已在生产 Supabase 保存并重新核对。
+- 上线文案清理移除后台全局订单徽章、页面搜索摘要的设计预览字样和浏览器预置优惠券。模拟记录的订单详情、邮件和业务营收仍明确显示实情。
+- 生产目录及优惠券按常见验收标识检查，未发现已发布的候选商品或已启用的候选优惠券。原有库存、订单和审计记录保留。
+
+## 正式收款前的阻塞
+
+- [ ] Worker、Stripe webhook 和数据库支付 RPC 均只接受模拟支付。需要先完成正式支付链路，包括校验订单与事件环境一致、预留库存、取消和退款，并使用独立的正式凭据及 webhook 签名。
+- [ ] 正式订单、营收和收件人与历史模拟数据需要有明确的归属。订单邮件目前只向核准收件人发送。新增业务报表和正式邮件发送路径前，先验证历史订单和售后操作仍可审计。
+- [ ] [PR #28](https://github.com/Milkkang/CPwebsite/pull/28) 的收款回跳、历史配送地址和订单会话问题尚待整合。需在隔离的验收环境完成买家与管理员端到端检查，并核实订单邮件实际送达。
+- [ ] 完成以上验证后，另行执行 Stripe 正式收款切换。公开结账保持关闭，直到切换完成。
+
+旧阶段的验收与证据见 [final-acceptance.md](final-acceptance.md)。

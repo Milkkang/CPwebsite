@@ -56,6 +56,8 @@ test('date filtering and monthly test sales exclude cancelled and unpaid orders'
   const shipped=adminPage('orders',undefined,new URLSearchParams('status=Shipped'));
   assert.match(shipped,/data-open-bulk-order="deliver"/);
   assert.match(shipped,/Mark selected as delivered/);
+  assert.match(shipped,/<p>1 order · Singapore time<\/p>/);
+  assert.doesNotMatch(shipped,/<header[^>]*>[\s\S]*?(?:\btest\b|simulated)[\s\S]*?<\/header>/i);
   assert.match(shipped,/data-select-order value="shipment-1"/);
   assert.doesNotMatch(shipped,/data-open-bulk-order="ship"/);
   const revenue=adminPage('revenue',undefined,new URLSearchParams('year=2026'));
