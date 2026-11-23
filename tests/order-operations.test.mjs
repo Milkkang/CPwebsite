@@ -14,7 +14,7 @@ test('unapproved testers cannot reserve stock or contact Stripe',async()=>{
 test('refund requires administrator; validates provider payment before issuing refund',async()=>{
  for(const isAdmin of [false,true])await mock(async url=>{
   if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin});
-  if(String(url).includes('prepare_test_order_operation'))return Response.json({intent:'pi_test_1',amount:1000,currency:'sgd'});
+  if(String(url).includes('prepare_order_operation'))return Response.json({intent:'pi_test_1',amount:1000,currency:'sgd'});
   assert.match(String(url),/payment_intents\/pi_test_1$/);
   return Response.json({id:'pi_test_1',livemode:true,amount:1000,currency:'sgd',metadata:{order_id:id}});
  },async()=>assert.equal((await call('/api/admin/order-actions',{orderId:id,version:1,action:'refund',restock:true})).status,isAdmin?409:403));
@@ -24,7 +24,7 @@ test('refund retries keep provider idempotency key and reconcile lost DB respons
  await mock(async(url,options)=>{
   const path=String(url);
   if(path.includes('resolve_web_session'))return Response.json({account,isAdmin:true});
-  if(path.includes('prepare_test_order_operation'))return Response.json({completed:false,intent:'pi_test_1',amount:1000,currency:'sgd'});
+  if(path.includes('prepare_order_operation'))return Response.json({completed:false,intent:'pi_test_1',amount:1000,currency:'sgd'});
   if(path.includes('payment_intents/'))return Response.json({id:'pi_test_1',livemode:false,amount:1000,currency:'sgd',metadata:{order_id:id}});
   if(path.includes('/refunds?'))return Response.json({data:[]});
   if(path.endsWith('/refunds')){keys.push(options.headers['Idempotency-Key']);assert.equal(new URLSearchParams(options.body).get('amount'),'1000');attempts++;return Response.json({id:'re_test_1',payment_intent:'pi_test_1',amount:1000,currency:'sgd',status:'succeeded'});}
@@ -41,7 +41,7 @@ test('pending refund never changes order or inventory',async()=>{
  await mock(async url=>{
   const path=String(url);
   if(path.includes('resolve_web_session'))return Response.json({account,isAdmin:true});
-  if(path.includes('prepare_test_order_operation'))return Response.json({intent:'pi_test_1',amount:1000,currency:'sgd'});
+  if(path.includes('prepare_order_operation'))return Response.json({intent:'pi_test_1',amount:1000,currency:'sgd'});
   if(path.includes('payment_intents/'))return Response.json({id:'pi_test_1',livemode:false,amount:1000,currency:'sgd',metadata:{order_id:id}});
   if(path.includes('/refunds?'))return Response.json({data:[]});
   assert.ok(path.endsWith('/refunds'));return Response.json({id:'re_test_1',payment_intent:'pi_test_1',amount:1000,currency:'sgd',status:'pending'});
@@ -52,7 +52,7 @@ test('expired checkout is reconciled without expiring it twice',async()=>{
  await mock(async(url,options)=>{
   const path=String(url);
   if(path.includes('resolve_web_session'))return Response.json({account,isAdmin:true});
-  if(path.includes('prepare_test_order_operation'))return Response.json({session:'cs_test_1'});
+  if(path.includes('prepare_order_operation'))return Response.json({session:'cs_test_1'});
   if(path.endsWith('/checkout/sessions/cs_test_1')){assert.equal(options.method,undefined);return Response.json({id:'cs_test_1',livemode:false,status:'expired'});}
   assert.ok(path.includes('finish_test_order_operation'));finished=true;return Response.json(true);
  },async()=>{

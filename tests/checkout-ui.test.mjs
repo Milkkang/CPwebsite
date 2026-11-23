@@ -48,15 +48,17 @@ test('only approved accounts see a checkout form with a no-charge notice',()=>{
 });
 
 test('Stripe return page waits for the signed webhook instead of claiming final payment state',()=>{
- const html=confirmation(new URLSearchParams('session_id=cs_test_123'));
- assert.match(html,/once Stripe confirms the simulated payment/);assert.doesNotMatch(html,/payment successful/i);
+ const html=confirmation(new URLSearchParams(),{status:'checking'});
+ assert.match(html,/waiting for payment confirmation from Stripe/);assert.doesNotMatch(html,/payment confirmed/i);
 });
 
 test('Stripe return refreshes the member cart until the signed webhook is visible',async()=>{
  const source=await readFile(new URL('../dist/app.js',import.meta.url),'utf8');
  assert.match(source,/async function refreshCheckoutReturn\(sessionId\)/);
- assert.match(source,/Promise\.all\(\[loadMemberShopping\(\),loadOrders\(\)\]\)/);
- assert.match(source,/case 'confirmation':[\s\S]*refreshCheckoutReturn\(params\.get\('session_id'\)\)/);
+ assert.match(source,/Promise\.allSettled\(\[loadMemberShopping\(\),loadOrders\(\)\]\)/);
+ assert.match(source,/\/api\/checkout\/status/);
+ assert.match(source,/history\.replaceState\(null,'','#\/confirmation'\)/);
+ assert.match(source,/case 'confirmation':[\s\S]*refreshCheckoutReturn\(returnSession\)/);
 });
 
 test('admin order loading includes email audit status and a controlled resend action',async()=>{

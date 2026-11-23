@@ -6,11 +6,14 @@
 - 上线文案清理移除后台全局订单徽章、页面搜索摘要的设计预览字样和浏览器预置优惠券。模拟记录的订单详情、邮件和业务营收仍明确显示实情。
 - 生产目录及优惠券按常见验收标识检查，未发现已发布的候选商品或已启用的候选优惠券。原有库存、订单和审计记录保留。
 
-## 正式收款前的阻塞
+## 正式收款切换
 
-- [ ] Worker、Stripe webhook 和数据库支付 RPC 均只接受模拟支付。需要先完成正式支付链路，包括校验订单与事件环境一致、预留库存、取消和退款，并使用独立的正式凭据及 webhook 签名。
-- [ ] 正式订单、营收和收件人与历史模拟数据需要有明确的归属。订单邮件目前只向核准收件人发送。新增业务报表和正式邮件发送路径前，先验证历史订单和售后操作仍可审计。
-- [ ] [PR #28](https://github.com/Milkkang/CPwebsite/pull/28) 的收款回跳、历史配送地址和订单会话问题尚待整合。需在隔离的验收环境完成买家与管理员端到端检查，并核实订单邮件实际送达。
-- [ ] 完成以上验证后，另行执行 Stripe 正式收款切换。公开结账保持关闭，直到切换完成。
+- 正式支付代码、付款回跳、配送地址快照和收件人隔离进入发布准备。部署配置继续使用受控的模拟结账，公开结账关闭。
+- 商户需在 Stripe 正式账户完成商户验证并设置收款账户。核对收款和打款能力后，在 Cloudflare Worker 受保护配置中使用正式 API 密钥及 webhook 签名密钥。不要在聊天、源码或构建日志中复制凭据。
+- 正式 webhook 路由为 `https://cpvaluemart.com/api/stripe/webhook`，接收 `checkout.session.completed`、`checkout.session.async_payment_succeeded`、`checkout.session.async_payment_failed`、`checkout.session.expired`。先核对现有模拟未结订单，处理完成或确认其过期后再更换凭据。
+- 更换凭据后先将 Worker 设为 `live-pilot`，仅管理员可发起正式结账。用获准的低额订单验证实收、签名回调、库存、邮件实际送达、退款和必要的库存恢复。核对账务和运营后将 `STRIPE_CHECKOUT_MODE` 改为 `live`。
+- 正式试单一旦创建，关闭公开结账时退回 `live-pilot`，保留正式 webhook 和凭据以处理已有付款和退款。切换前的模拟数据应保留以供审计。
+
+[Stripe 上线清单](https://docs.stripe.com/get-started/checklist/go-live)
 
 旧阶段的验收与证据见 [final-acceptance.md](final-acceptance.md)。

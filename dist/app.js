@@ -12,13 +12,13 @@ let renderedAdminGate=null;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
-let ordersOwner='',ordersLoading=false;
-let checkoutReturnRefresh='';
+let ordersOwner='';
+let returnSession='',checkoutReturn,ordersRequest;
 let checkoutAccess;
 function loadCheckoutAccess(owner){
  const check={owner,available:null};
  checkoutAccess=check;
- authRequest('/api/checkout/session').then(data=>{check.available=data.available===true;})
+ authRequest('/api/checkout/session').then(data=>{check.available=data.available===true;check.livePayment=data.livePayment===true;check.pending=data.pending===true;})
   .catch(()=>{check.available=false;})
   .finally(()=>{if(checkoutAccess===check&&route().path==='/checkout')render();});
 }
@@ -34,31 +34,49 @@ function trackTraffic(event){
   .then(response=>{if(response.ok){trafficRecorded.add(key);try{sessionStorage.setItem(key,'1');}catch{}}})
   .catch(()=>{}).finally(()=>trafficPending.delete(key));
 }
-function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,createdAt:row.createdAt,date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(row.createdAt)),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
+function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,createdAt:row.createdAt,date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(row.createdAt)),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',deliveryName:row.address?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
  items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty})),
- totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt};}
+ totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt,livePayment:row.livePayment===true};}
 async function loadOrders(){
- const owner=auth.account?.id;if(!owner||auth.recoveryOnly)return;
- ordersLoading=true;try{const result=await authRequest('/api/orders');if(auth.account?.id===owner){state.orders=result.orders.map(mapOrder);ordersOwner=owner;}}
- catch(error){message(error.message);}finally{ordersLoading=false;render();}
+ const owner=auth.account?.id;
+ if(!owner||auth.recoveryOnly||ordersRequest?.owner===owner)return;
+ const request={owner};ordersRequest=request;
+ try{
+  const result=await authRequest('/api/orders');
+  if(ordersRequest===request&&auth.account?.id===owner){
+   state.orders=result.orders.map(mapOrder);ordersOwner=owner;
+  }
+ }catch(error){if(ordersRequest===request)message(error.message);}
+ finally{if(ordersRequest===request){ordersRequest=undefined;render();}}
 }
 async function refreshCheckoutReturn(sessionId){
  const owner=auth.account?.id;
- if(!owner||!sessionId||checkoutReturnRefresh===sessionId)return;
- checkoutReturnRefresh=sessionId;
- for(let attempt=0;attempt<10&&auth.account?.id===owner;attempt++){
-  try{
-   await Promise.all([loadMemberShopping(),loadOrders()]);
-   if(!Object.keys(state.cart).length&&state.orders.some(order=>order.paymentStatus==='paid'))return;
-  }catch{}
-  await new Promise(resolve=>setTimeout(resolve,1000));
- }
+ if(!owner||!sessionId||checkoutReturn)return;
+ const result={status:'checking'};
+ checkoutReturn=result;
+ const active=()=>checkoutReturn===result&&auth.account?.id===owner;
+ try{
+  for(let attempt=0;attempt<15&&active();attempt++){
+   const data=await authRequest('/api/checkout/status?'+new URLSearchParams({session_id:sessionId}));
+   if(!active())return;
+   if(data.paymentStatus!=='pending'){
+    Object.assign(result,{status:data.paymentStatus,orderNumber:data.orderNumber,livePayment:data.livePayment===true});
+    await Promise.allSettled([loadMemberShopping(),loadOrders()]);
+    return;
+   }
+   await new Promise(resolve=>setTimeout(resolve,2000));
+  }
+  result.status='pending';
+ }catch(error){result.status=error.code==='CHECKOUT_NOT_FOUND'?'unavailable':'error';}
+ finally{if(active())render();}
 }
 async function loadAdminProducts() {
   if(!auth.isAdmin||adminProductsLoading)return;
+  const owner=auth.account?.id;
   adminProductsLoading=true;adminProductsError='';
   try{
     const [result,config,orderResult,emailResult,searchResult,categoryResult,trafficResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs'),authRequest('/api/admin/search'),authRequest('/api/admin/categories'),authRequest('/api/admin/traffic').then(data=>({data})).catch(error=>({error:error.message}))]);
+    if(auth.account?.id!==owner||!auth.isAdmin)return;
     state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
     state.adminCategories=categoryResult.categories;
     categories.splice(0,categories.length,...categoryResult.categories.map(row=>[row.id,row.name,row.icon??'',row.color??'sage']));
@@ -72,7 +90,7 @@ async function loadAdminProducts() {
     deliveryVersion=config.delivery?.version??0;
     state.coupons=config.coupons.map(row=>({code:row.code,type:row.kind,amount:row.amount,min:row.minimum_cents,active:row.active}));
     couponVersions=new Map(config.coupons.map(row=>[row.code,row.version]));
-    state.orders=orderResult.orders.map(row=>({...mapOrder(row),emailJobs:emailResult.jobs.filter(job=>job.orderId===row.id)}));
+    state.adminOrders=orderResult.orders.map(row=>({...mapOrder(row),emailJobs:emailResult.jobs.filter(job=>job.orderId===row.id)}));
     adminProductsLoaded=true;
   }catch(error){adminProductsError=error.message;adminProductsLoaded=false;}
   finally{adminProductsLoading=false;render();}
@@ -239,6 +257,18 @@ const privateBuyerRoutes=new Set(['/cart','/orders','/saved','/recently-viewed',
 function route() {
   const hash=location.hash.slice(1) || (location.pathname==='/'||location.pathname.endsWith('.html')?'/':location.pathname);
   const [path,qs='']=hash.split('?');
+  if(path==='/confirmation'){
+    const sessionId=new URLSearchParams(qs).get('session_id');
+    if(sessionId){
+      if(/^cs_(?:test|live)_[A-Za-z0-9_]{1,200}$/.test(sessionId)&&returnSession!==sessionId){
+        returnSession=sessionId;checkoutReturn=undefined;
+      }
+      history.replaceState(null,'','#/confirmation');
+      return route();
+    }
+  }else if(path!=='/account'||!new URLSearchParams(qs).get('next')?.startsWith('/confirmation')){
+    returnSession='';checkoutReturn=undefined;
+  }
   let destination=previousAdminRoutes.get(path)??path;
   let params=Object.fromEntries(new URLSearchParams(qs));
   const section='/'+path.replace(/^\//,'').split('/')[0];
@@ -306,14 +336,14 @@ function render({scroll=false}={}) {
       case 'checkout': {
         if(state.account&&!checkoutAccess)loadCheckoutAccess(state.account.id);
         if(checkoutAccess?.available&&deliveryAddresses()===null)queueMicrotask(loadAddresses);
-        body=checkout(deliveryAddresses(),checkoutAccess?.available);break;
+        body=checkout(deliveryAddresses(),checkoutAccess?.available,{livePayment:checkoutAccess?.livePayment,pending:checkoutAccess?.pending});break;
       }
       case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
       case 'orders': body=orders(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
       case 'confirmation':
-        if(auth.account&&!auth.recoveryOnly)queueMicrotask(()=>refreshCheckoutReturn(params.get('session_id')));
-        body=confirmation(params);break;
+        if(auth.account&&!auth.recoveryOnly&&returnSession)queueMicrotask(()=>refreshCheckoutReturn(returnSession));
+        body=confirmation(params,returnSession?(checkoutReturn??{status:'checking'}):undefined);break;
       case 'saved': body=savedPage();break;
       case 'offers': body=offers();break;
       default: body=info(key);
@@ -444,13 +474,24 @@ document.addEventListener('submit', async event=>{
     }
     case 'account-form':
       error='Use the secure sign-in form.';break;
+    case 'checkout-pending-form': {
+      const button=event.submitter;if(!button||button.disabled)break;
+      button.disabled=true;
+      try{
+        const result=await authRequest('/api/checkout/manage',{action:button.value});
+        if(result.checkoutUrl?.startsWith('https://checkout.stripe.com/')){location.assign(result.checkoutUrl);return;}
+        if(result.cancelled){checkoutAccess=undefined;render();message('Checkout cancelled. Your basket is ready.');return;}
+      }catch(problem){error=problem.message;}
+      button.disabled=false;break;
+    }
     case 'checkout-form': {
       const button=event.submitter??form.querySelector('button');if(button)button.disabled=true;
       const status=form.querySelector('[data-checkout-status]');if(status){status.hidden=false;status.textContent='Opening Stripe checkout…';}
       try{const result=await authRequest('/api/checkout/session',{addressId:String(f.addressId),coupon:state.coupon||''});
-        if(!result.testMode||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Checkout could not be verified.');
+        if(typeof result.checkoutUrl!=='string'||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Checkout could not be verified.');
         location.assign(result.checkoutUrl);return;
-      }catch(problem){error=problem.message;if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
+      }catch(problem){error=problem.message;if(problem.code==='CHECKOUT_PENDING'){checkoutAccess=undefined;render();}
+        if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
       break;
     }
     case 'buyer-review-form':
@@ -462,7 +503,7 @@ document.addEventListener('submit', async event=>{
         navigate('/admin/products',Object.fromEntries(route().params));message('Product saved.');}
       catch(problem){error=problem.message;}break;
     case 'order-editor': {
-      const order=state.orders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
+      const order=state.adminOrders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
       if(!order?.backendId){error='Order not found.';break;}
       try{await authRequest('/api/admin/orders',{orderId:order.backendId,version:order.version,status:shipItem?'Shipped':String(data.get('status')),tracking:String(data.get('tracking')??'').trim()});
         adminProductsLoaded=false;await loadAdminProducts();message(shipItem?'Item shipped.':'Fulfilment saved.');}
@@ -517,7 +558,7 @@ document.addEventListener('click', async event=>{
     const shipping=data.openBulkOrder==='ship';
     const selected=new Set([...app.querySelectorAll('[data-select-order]:checked')].map(input=>input.value));
     const eligible=shipping?canShipOrder:canDeliverOrder;
-    const orders=state.orders.filter(order=>selected.has(order.backendId)&&eligible(order));
+    const orders=state.adminOrders.filter(order=>selected.has(order.backendId)&&eligible(order));
     if(!orders.length)return;
     const fields=orders.map(order=>{
       const field=' name="'+e(order.backendId)+'" data-order-version="'+e(order.version)+'"';
@@ -597,10 +638,10 @@ document.addEventListener('click', async event=>{
     const row=getVariant(data.stock);
     if(row) showModal(stockEditor(data.stock,row.variant,row.product));
   } else if('orderAction' in data) {
-    const order=state.orders.find(row=>row.id===data.orderId);
+    const order=state.adminOrders.find(row=>row.id===data.orderId);
     if(!order?.backendId)return;
     const restock=Boolean(document.getElementById('refund-restock')?.checked);
-    if(!window.confirm(data.orderAction==='refund'?'Refund this simulated payment and close the order'+(restock?' with stock returned?':' without returning stock?'):'Cancel this unpaid simulated order?'))return;
+    if(!window.confirm(data.orderAction==='refund'?'Refund this '+(order.livePayment?'':'simulated ')+'payment and close the order'+(restock?' with stock returned?':' without returning stock?'):'Cancel this unpaid order?'))return;
     button.disabled=true;
     try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});adminProductsLoaded=false;await loadAdminProducts();message('Order updated.');}
     catch(error){message(error.message);button.disabled=false;}
@@ -680,11 +721,18 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pageshow',event=>{if(event.persisted){storefront={key:'',data:null,error:null};refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}});
 window.addEventListener('hashchange',()=>{if(imageDialog.open)imageDialog.close();if(modal.open)modal.close();render({scroll:true});});
-window.addEventListener('storage',event=>{
-  if(event.key==='cvm-preview-13m-20261118-v1'&&event.newValue) {
-    try {Object.assign(state,JSON.parse(event.newValue),{account:null});render();} catch {}
-  }
+let lastSignedInAccount;
+setAuthListener(()=>{
+ const owner=auth.recoveryOnly?undefined:auth.account?.id;
+ if(owner!==lastSignedInAccount){
+  if(lastSignedInAccount){returnSession='';checkoutReturn=undefined;}
+  lastSignedInAccount=owner;
+  state.orders=[];state.adminOrders=[];ordersOwner='';ordersRequest=undefined;
+  adminProductsLoaded=false;adminProductsError='';
+ }
+ if(!auth.isAdmin||auth.recoveryOnly){state.adminOrders=[];adminProductsLoaded=false;}
+ if(owner&&owner!==ordersOwner&&ordersRequest?.owner!==owner)loadOrders();
+ render();syncShopping();
 });
-setAuthListener(()=>{if(auth.account?.id!==shoppingOwner)adminProductsLoaded=false;if(auth.account?.id&&auth.account.id!==ordersOwner&&!ordersLoading)loadOrders();render();syncShopping();});
 render();
 refreshSession();

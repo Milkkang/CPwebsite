@@ -221,3 +221,73 @@ begin
  end if;
 end $$;
 rollback;
+
+begin;
+do $$
+declare buyer uuid:=gen_random_uuid(); addr uuid:=gen_random_uuid(); new_order uuid; simulated uuid; result jsonb; order_version integer;
+begin
+ insert into public.delivery_rules(id,country_code,shipping_cents,free_threshold_cents) values('live-fixture','SG',390,5000);
+ insert into auth.users(id,email,email_confirmed_at) values(buyer,'live-buyer@example.invalid',now());
+ insert into public.admin_roles(user_id) values(buyer);
+ insert into public.buyer_addresses(id,user_id,full_name,address_line,postal_code)
+ values(addr,buyer,'Delivery name','Synthetic Road','123456');
+ insert into public.products(id,sku,name,variant_name,brand,category_id,image_url,original_image_url,r2_image_url,price_cents,stock,min_quantity,status)
+ values('LIVE-1','LIVE-1','Fixture','One','Fixture','acceptance','https://example.invalid/a.jpg','https://example.invalid/a.jpg','https://example.invalid/a.jpg',1000,10,1,'Published');
+ insert into public.buyer_cart_items(user_id,sku,quantity) values(buyer,'LIVE-1',2);
+ result:=public.create_live_order(buyer,addr,null);
+ new_order:=(result->>'id')::uuid;
+ if (result->>'live_payment')::boolean is distinct from true then raise exception 'Live order not classified'; end if;
+ begin
+  perform public.create_live_order(buyer,addr,null);
+  raise exception 'Duplicate pending order';
+ exception when sqlstate 'PT409' then null;
+ end;
+ if not public.attach_test_checkout(buyer,new_order,'cs_live_fixture') then raise exception 'Session not attached'; end if;
+ begin
+  perform public.apply_test_payment_event('evt_wrong_mode','checkout.session.completed',false,new_order,'cs_live_fixture','pi_live_fixture',(result->>'total_cents')::integer,'sgd');
+  raise exception 'Wrong mode accepted';
+ exception when invalid_parameter_value then null;
+ end;
+ begin
+  perform public.apply_test_payment_event('evt_wrong_total','checkout.session.completed',true,new_order,'cs_live_fixture','pi_live_fixture',50,'sgd');
+  raise exception 'Wrong total accepted';
+ exception when invalid_parameter_value then null;
+ end;
+ update public.buyer_cart_items set quantity=3 where user_id=buyer and sku='LIVE-1';
+ perform public.apply_test_payment_event('evt_live_paid','checkout.session.completed',true,new_order,'cs_live_fixture','pi_live_fixture',(result->>'total_cents')::integer,'sgd');
+ perform public.apply_test_payment_event('evt_live_paid','checkout.session.completed',true,new_order,'cs_live_fixture','pi_live_fixture',(result->>'total_cents')::integer,'sgd');
+ if (select stock from public.products where sku='LIVE-1')<>8 or
+  (select reserved_quantity from public.products where sku='LIVE-1')<>0 or
+  (select quantity from public.buyer_cart_items where user_id=buyer and sku='LIVE-1')<>3 then
+  raise exception 'Payment did not commit stock exactly once or damaged the changed cart';
+ end if;
+ select version into order_version from public.orders where id=new_order;
+ perform public.admin_update_order(buyer,new_order,order_version,'Shipped','LIVE-TRACK');
+ select version into order_version from public.orders where id=new_order;
+ perform public.admin_update_order(buyer,new_order,order_version,'Delivered','LIVE-TRACK');
+ select version into order_version from public.orders where id=new_order;
+ perform public.prepare_order_operation(buyer,new_order,order_version,'refund',true,true);
+ perform public.finish_test_order_operation(buyer,new_order,'refund','re_live_fixture');
+ if (select stock from public.products where sku='LIVE-1')<>10 then raise exception 'Live refund did not restore stock'; end if;
+ if (select count(*) from public.email_jobs where order_id=new_order and not is_test and recipient='live-buyer@example.invalid')<>5 then
+  raise exception 'Live notifications were not queued correctly';
+ end if;
+ result:=public.create_live_order(buyer,addr,null);
+ if not public.attach_test_checkout(buyer,(result->>'id')::uuid,'cs_live_cancel') then raise exception 'Cancellation session not attached'; end if;
+ if not public.cancel_live_checkout(buyer,(result->>'id')::uuid,'cs_live_cancel') or
+    not public.cancel_live_checkout(buyer,(result->>'id')::uuid,'cs_live_cancel') then raise exception 'Cancel did not reconcile'; end if;
+ if (select count(*) from public.email_jobs where order_id=(result->>'id')::uuid and kind='cancellation' and not is_test)<>1 then
+  raise exception 'Live cancellation email missing or duplicated';
+ end if;
+ simulated:=(public.create_test_order(buyer,addr,null)->>'id')::uuid;
+ begin
+  perform public.apply_test_payment_event('evt_sim_live','checkout.session.completed',true,simulated,'cs_live_fixture','pi_live_fixture',50,'sgd');
+  raise exception 'Live event was applied to simulation';
+ exception when invalid_parameter_value then null;
+ end;
+ delete from public.buyer_addresses where user_id=buyer and id=addr;
+ if not exists(select 1 from private.order_delivery_addresses where order_id=new_order and full_name='Delivery name') then
+  raise exception 'Order delivery snapshot lost';
+ end if;
+end $$;
+rollback;
