@@ -31,7 +31,7 @@ test('address list labels the default and offers selection only for other addres
 });
 
 test('the account page has no admin shortcut, including for administrator profiles',async()=>{
- const {auth,profilePanel,adminGate}=await import('../dist/auth.js');
+ const {auth,profilePanel}=await import('../dist/auth.js');
  const {shopFrame}=await import('../dist/shop.js');
  const previous={...auth};
  try{
@@ -40,6 +40,25 @@ test('the account page has no admin shortcut, including for administrator profil
   assert.match(html,/id="auth-profile"/);
   assert.doesNotMatch(html,/href="#\/admin(?:[/?"])/);
   assert.match(shopFrame(''),/href="#\/admin"/);
-  assert.match(adminGate(),/href="#\/account\?next=\/admin"/);
  }finally{Object.assign(auth,previous);}
+});
+
+test('admin sign-in and recovery render directly and allow a buyer to switch accounts',async()=>{
+ const {auth,adminGate,passwordPanel,submitAuth}=await import('../dist/auth.js');
+ const {adminPage}=await import('../dist/admin.js');
+ const previous={...auth}, original=globalThis.fetch;
+ try{
+  Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false,loading:false,error:''});
+  const login=adminGate(new URLSearchParams());
+  assert.match(login,/id="auth-login"/);
+  assert.match(login,/href="#\/admin\?mode=recover"/);
+  assert.match(adminGate(new URLSearchParams('mode=recover')),/id="auth-recover"[\s\S]*href="#\/admin"/);
+  Object.assign(auth,{account:{id:'buyer'}});
+  globalThis.fetch=async()=>Response.json({error:{code:'SIGN_IN_FAILED',message:'Incorrect password'}},{status:401});
+  await assert.rejects(submitAuth({id:'auth-login'},{email:'fixture@example.invalid',password:'invalid'}),/Incorrect password/);
+  const denied=adminGate(new URLSearchParams());
+  assert.match(denied,/does not have administrator access[\s\S]*data-sign-out/);
+  assert.doesNotMatch(denied,/id="auth-login"/);
+  assert.match(adminPage('settings','',new URLSearchParams(),passwordPanel()),/Change password[\s\S]*name="currentPassword"/);
+ }finally{Object.assign(auth,previous);globalThis.fetch=original;}
 });

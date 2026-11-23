@@ -15,7 +15,7 @@ export function setAuthListener(fn){onAuthChange=fn;channel?.addEventListener('m
 export async function authRequest(path,data) {
  const r=await fetch(path,{method:data===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',headers:data===undefined?{}:{'Content-Type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
  let body;try{body=await r.json();}catch{throw Error('Account service is unavailable. Please try again.');}
- if(!r.ok){if(r.status===401){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;throw error;}
+ if(!r.ok){if(r.status===401&&path!=='/api/auth/login'){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;throw error;}
  return body;
 }
 export async function refreshSession() {
@@ -53,8 +53,20 @@ export async function submitAuth(form,fields) {
  if(action==='address')await loadAddresses();
  return result;
 }
-export function adminGate() {
- return '<main class="wrap" id="main"><section class="panel narrow"><h1>Administrator access</h1><p>'+(auth.loading?'Checking your session…':auth.account?'This account does not have administrator access.':'Sign in with your verified administrator account.')+'</p><a class="btn primary" href="#/account?next=/admin">Sign in</a></section></main>';
+export function adminGate(params) {
+ const mode=params.get('mode');
+ const status='<p data-auth-status role="status" class="notice" hidden></p>';
+ const email=input('Email address','email','email','autocomplete="username" maxlength="254"');
+ const back='<a href="#/admin" class="text-link">Back to admin sign in</a>';
+ let body;
+ if(auth.loading)body='<h1>Admin sign in</h1><p role="status">Checking your session…</p>';
+ else if(auth.error)body='<h1>Admin sign in</h1><p role="alert">'+e(auth.error)+'</p><button class="btn primary" data-auth-retry>Try again</button>';
+ else if(auth.recoveryOnly)return '<main class="wrap admin-auth" id="main">'+authForms(params)+'</main>';
+ else if(mode==='recover')body='<h1>Reset your admin password</h1><form id="auth-recover" class="form-stack">'+email+'<button class="btn primary">Send reset email</button>'+status+'</form>'+back;
+ else if(auth.account)body='<h1>Admin sign in</h1><p role="alert">This account does not have administrator access.</p><button class="btn primary" data-sign-out>Sign out to switch accounts</button><a href="#/admin?mode=recover" class="text-link">Forgot password?</a>';
+ else body='<h1>Admin sign in</h1><form id="auth-login" class="form-stack">'+email+pass()+'<button class="btn primary">Sign in</button>'+status+'</form><a href="#/admin?mode=recover" class="text-link">Forgot password?</a>';
+ return '<main class="wrap admin-auth" id="main"><section class="panel narrow form-stack">'+
+  '<a class="logo" href="#/"><span class="mark" aria-hidden="true"></span><span>CP Value Mart</span></a>'+body+'</section></main>';
 }
 export function profilePanel(){return '<section class="panel"><h2>Account details</h2><form id="auth-profile" class="form-stack"><label>Name<input name="name" value="'+e(auth.account?.name)+'" required maxlength="80" autocomplete="name"></label><button class="btn outline">Save name</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
 export function passwordPanel(){return '<section class="panel"><h2>Change password</h2><p>After saving, sign in again with your new password.</p><form id="auth-password" class="form-stack">'+input('Current password','currentPassword','password','autocomplete="current-password" maxlength="128"')+input('New password','password','password','autocomplete="new-password" minlength="12" maxlength="128"')+input('Confirm new password','confirmPassword','password','autocomplete="new-password" minlength="12" maxlength="128"')+'<button class="btn primary">Save password</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
