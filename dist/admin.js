@@ -5,7 +5,7 @@ import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
 const nav=[['','Overview'],['revenue','Revenue'],['orders','Orders'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
-  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Stripe test orders</span>'+go('/','View storefront ↗','btn outline small')+'</div></div></header>'+
+  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Stripe test orders</span>'+go('/','View storefront ↗','btn outline small')+'<button class="btn outline small" data-sign-out>Sign out</button></div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
 }
 const heading=(title,subtitle='',actions='')=>'<div class="admin-heading"><div><h1>'+title+'</h1>'+(subtitle?'<p>'+subtitle+'</p>':'')+'</div><div class="button-row">'+actions+'</div></div>';
@@ -314,12 +314,13 @@ export function saveHomepage(values) {
   if(next.heroProductIds.length>3||next.heroProductIds.some(id=>findProduct(id)?.status!=='Published')) return 'Choose up to three published banner products.';
   state.settings.homepage=next;save();
 }
-function settingsPage() {
+function settingsPage(accountSettings) {
   return heading('Settings','Delivery rules apply immediately to the storefront.')+
     '<form class="panel form-stack narrow" id="settings-form"><h2>Singapore delivery</h2>'+amountInput('Standard delivery charge (SGD)','shipping',state.settings.shipping)+
-    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>';
+    amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>'+
+    accountSettings;
 }
-export function adminPage(page,id,params) {
+export function adminPage(page,id,params,accountSettings='') {
   let body;
   switch(page) {
     case '': body=overview(params); break;
@@ -329,7 +330,7 @@ export function adminPage(page,id,params) {
     case 'customers': body=customersPage();break;
     case 'coupons': body=couponPage();break;
     case 'search': body=searchPage();break;
-    case 'settings': body=settingsPage();break;
+    case 'settings': body=settingsPage(accountSettings);break;
     case 'homepage': body=homepagePage();break;
     default: body=empty('Admin page not found','Return to the overview.',go('/admin','Overview','btn primary'));
   }

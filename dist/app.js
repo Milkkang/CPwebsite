@@ -260,7 +260,8 @@ function render({scroll=false}={}) {
   const {path,params}=route();
   const [key='',id='',object='']=path.replace(/^\//,'').split('/');
   const admin=key==='admin';
-  if(admin&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
+  const adminRecovery=admin&&params.get('mode')==='recover';
+  if(admin&&!adminRecovery&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
   const productView=key==='product'?path+'?'+(params.get('sku')??''):'';
   const publicCatalog=['','shop','search','categories','category','product','cart','offers'].includes(key);
   if(publicCatalog&&path!==lastPath&&storefront.key===storefrontKey(path,params))storefront={key:'',data:null,error:null};
@@ -271,8 +272,9 @@ function render({scroll=false}={}) {
   if(publicCatalog&&!remote) body='<section class="empty" role="status"><h2>Loading catalog…</h2></section>';
   else if(publicCatalog&&remote.error) body=storefrontFailure(remote.error);
   else if((auth.loading&&privateBuyerRoutes.has(path))||(shoppingLoading&&['cart','saved','recently-viewed'].includes(key)))body='<section class="panel narrow"><h1>My account</h1><p role="status">Loading your shopping list…</p></section>';
-  else if(admin) body=auth.isAdmin&&!auth.recoveryOnly?
-    !adminProductsLoaded?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':adminPage(id,object,params):adminGate();
+  else if(admin) body=auth.isAdmin&&!auth.recoveryOnly&&!adminRecovery?
+    !adminProductsLoaded?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':
+      adminPage(id,object,params,id==='settings'?'<div class="narrow account-settings">'+passwordPanel()+'</div>':''):adminGate(params);
   else {
     switch(key) {
       case '': body=home(remote.data.products);break;
@@ -338,13 +340,14 @@ document.addEventListener('submit', async event=>{
   event.preventDefault();
   const data=new FormData(form), f=Object.fromEntries(data);
   if(form.id.startsWith('auth-')) {
+    const admin=location.hash.startsWith('#/admin');
     const button=event.submitter??form.querySelector('button');if(button?.disabled)return;
     if(button)button.disabled=true;
     const status=form.querySelector('[data-auth-status]');if(status){status.hidden=false;status.textContent='Please wait…';}
     try {
       const result=await submitAuth(form,f);
-      if(form.id==='auth-login')returnAfterSignIn(form.dataset.next??'');
-      else if(form.id==='auth-password'){navigate('/account');message(result.message);}
+      if(form.id==='auth-login'&&!admin)returnAfterSignIn(form.dataset.next??'');
+      else if(form.id==='auth-password'){navigate(admin?'/admin':'/account');message(result.message);}
       else if(form.id==='auth-verify'){navigate('/account');message(result.recoveryOnly?'Choose your new password.':'Email verified. Sign in with your password.');}
       else if(form.id==='auth-profile')message('Name saved.');
       else if(form.id==='auth-address')message('Address saved.');
@@ -444,6 +447,14 @@ document.addEventListener('click', async event=>{
   if(!button) return;
   const data=button.dataset;
   if('authRetry'in data){await refreshSession();return;}
+  if('signOut' in data){
+    if(button.disabled)return;
+    const admin=location.hash.startsWith('#/admin');
+    button.disabled=true;
+    try{await signOut();navigate(admin?'/admin':'/account');message('Signed out.');}
+    catch(error){button.disabled=false;message(error.message);}
+    return;
+  }
   if('retryAdmin'in data){adminProductsError='';loadAdminProducts();return;}
   if('retryCatalog'in data){storefront={key:'',data:null,error:null};pendingStorefront='';render();return;}
   if('defaultAddress'in data){if(button.disabled)return;button.disabled=true;try{await authRequest('/api/addresses/'+data.defaultAddress,{action:'default'});await loadAddresses();message('Default delivery address saved.');}catch(error){button.disabled=false;message(error.message);}return;}
@@ -483,7 +494,6 @@ document.addEventListener('click', async event=>{
     const qty=state.cart[sku]+Number(data.delta);
     try{await setShoppingCart(sku,qty);render();}catch(error){message(error.message);}
   } else if('remove' in data) {try{await setShoppingCart(data.remove,0);render();}catch(error){message(error.message);}}
-  else if('signOut' in data) {try{await signOut();navigate('/account');message('Signed out.');}catch(error){message(error.message);}}
   else if('resendEmail' in data) {
     if(button.disabled)return;button.disabled=true;
     try{await authRequest('/api/admin/email-jobs',{action:'resend',jobId:data.resendEmail});adminProductsLoaded=false;await loadAdminProducts();message('Email queued for another test delivery.');}
