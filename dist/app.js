@@ -261,16 +261,19 @@ const privateBuyerRoutes=new Set(['/cart','/orders','/saved','/recently-viewed',
 function route() {
   const hash=location.hash.slice(1) || (location.pathname==='/'||location.pathname.endsWith('.html')?'/':location.pathname);
   const [path,qs='']=hash.split('?');
+  const query=new URLSearchParams(qs);
   if(path==='/confirmation'){
-    const sessionId=new URLSearchParams(qs).get('session_id');
-    if(sessionId){
-      if(/^cs_(?:test|live)_[A-Za-z0-9_]{1,200}$/.test(sessionId)&&returnSession!==sessionId){
-        returnSession=sessionId;checkoutReturn=undefined;
-      }
-      history.replaceState(null,'','#/confirmation');
+    if(query.has('session_id')){
+      const sessionId=query.get('session_id');
+      const checkoutSession=/^cs_(?:test|live)_[A-Za-z0-9_]{1,200}$/.test(sessionId)?sessionId:'';
+      history.replaceState({...history.state,checkoutSession},'','#/confirmation');
       return route();
     }
-  }else if(path!=='/account'||!new URLSearchParams(qs).get('next')?.startsWith('/confirmation')){
+    const sessionId=history.state?.checkoutSession??'';
+    if(returnSession!==sessionId){
+      returnSession=sessionId;checkoutReturn=undefined;
+    }
+  }else{
     returnSession='';checkoutReturn=undefined;
   }
   let destination=previousAdminRoutes.get(path)??path;
@@ -291,6 +294,10 @@ function route() {
 }
 function returnAfterSignIn(next) {
   const [path,qs='']=next.split('?');
+  if(path==='/confirmation'&&history.state?.checkoutSession){
+    history.replaceState(history.state,'','#/confirmation');
+    return render();
+  }
   if(path==='checkout'||path==='/checkout') return navigate('/checkout');
   if(path==='/admin'&&auth.isAdmin)return navigate('/admin');
   if(/^\/product\/[A-Za-z0-9_-]{1,100}$/.test(path))return navigate(path,Object.fromEntries(new URLSearchParams(qs)));

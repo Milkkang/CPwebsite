@@ -137,11 +137,12 @@ function orderStage(order){
 }
 function ordersPage(params){
  const q=params.get('q')??'',status=params.get('status')??'';
+ const customer=params.get('customer')??'';
  const from=params.get('from')??'',to=params.get('to')??'';
  const dateError=from||to?revenueDateError(from,to):'';
  const group=['day','week','month','quarter','year'].includes(params.get('group'))?params.get('group'):'day';
  const sort=params.get('sort')==='oldest'?'oldest':'newest';
- const matching=state.adminOrders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(dateError||!from||o.date>=from)&&(dateError||!to||o.date<=to));
+ const matching=state.adminOrders.filter(o=>(!customer||o.email===customer)&&(o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(dateError||!from||o.date>=from)&&(dateError||!to||o.date<=to));
  const counts=new Map();
  for(const order of matching){
   const stage=orderStage(order);
@@ -153,6 +154,8 @@ function ordersPage(params){
  const filters={...Object.fromEntries(params),group,sort,size:paging.size,page:paging.page,origin:'orders'};
  const pagination=listPagination('/admin/orders',params,paging,rows.length,'Orders');
  const {page:ignoredPage,origin:ignoredOrigin,status:ignoredStatus,...stageFilters}=Object.fromEntries(params);
+ const {customer:ignoredCustomer,...allCustomers}=Object.fromEntries(params);
+ delete allCustomers.page;
  const stageLink=stage=>e(href('/admin/orders',stage?{...stageFilters,status:stage}:stageFilters));
  const delivering=status==='Shipped';
  const eligible=delivering?canDeliverOrder:canShipOrder;
@@ -163,10 +166,12 @@ function ordersPage(params){
   ).join('')+'</nav>'+
   '<form class="admin-filters" id="admin-filter" data-path="/admin/orders">'+field('Find order','q',q,'placeholder="Order number or customer"')+
   '<input type="hidden" name="status" value="'+e(status)+'">'+
+  (customer?'<input type="hidden" name="customer" value="'+e(customer)+'">':'')+
   field('From','from',from,'type="date"')+field('To','to',to,'type="date"')+
   '<label>Group by<select name="group">'+[['day','Day'],['week','Week'],['month','Month'],['quarter','Quarter'],['year','Year']].map(([key,label])=>'<option value="'+key+'"'+selected(key,group)+'>'+label+'</option>').join('')+'</select></label>'+
   '<label>Sort<select name="sort"><option value="newest"'+selected(sort,'newest')+'>Newest first</option><option value="oldest"'+selected(sort,'oldest')+'>Oldest first</option></select></label>'+
   pageSize(paging.size,'Orders per page')+'<button class="btn outline">Filter</button>'+(status?'<a class="btn outline" href="'+stageLink('')+'">All orders</a>':'')+'</form>'+(dateError?'<p class="notice" role="status">'+e(dateError)+' Showing all dates.</p>':'')+
+  (customer?'<div class="button-row"><span>Customer '+e(customer)+'</span>'+link(href('/admin/orders',allCustomers),'Clear customer filter','text-link')+'</div>':'')+
   (canSelect?'<div class="order-bulk-toolbar"><label class="check-label"><input type="checkbox" data-select-page-orders> Select all on this page</label><span class="subtle" data-order-selection role="status">0 selected</span><button type="button" class="btn primary" data-open-bulk-order="'+(delivering?'deliver':'ship')+'" disabled>'+(delivering?'Mark selected as delivered':'Ship selected')+'</button></div>':'')+
   '<div class="button-row order-group-actions"><button type="button" class="btn outline small" data-order-groups="expand">Expand all</button><button type="button" class="btn outline small" data-order-groups="collapse">Collapse all</button></div>'+pagination+
   (groups.length?groups.map(g=>'<details class="order-date-group" open><summary>'+e(g.label)+' <span class="subtle">'+g.orders.length+(g.orders.length===1?' order':' orders')+' on this page</span></summary>'+ordersTable(g.orders,filters,canSelect?eligible:null)+'</details>').join(''):empty('No matching orders','Adjust or clear the filters.'))+pagination;
@@ -280,11 +285,11 @@ function customersPage() {
   for(const o of state.adminOrders) {
     const c=customers.get(o.email)??{name:o.name,email:o.email,orders:0,spend:0};
     c.orders++;
-    if(o.status!=='Cancelled') c.spend+=o.totals.total;
+    c.spend+=orderRevenue(o);
     customers.set(o.email,c);
   }
   return heading('Customers',customers.size+(customers.size===1?' shopper profile':' shopper profiles'))+
-    table(['Customer','Email','Orders','Order value',''],[...customers.values()].map(c=>'<tr><td><b>'+e(c.name)+'</b></td><td>'+e(c.email)+'</td><td>'+c.orders+'</td><td>'+cash(c.spend)+'</td><td>'+link(href('/admin',{q:c.email,range:'1y'}),'View orders ↗','text-link')+'</td></tr>').join('')||'<tr><td colspan="5">No customer orders yet.</td></tr>');
+    table(['Customer','Email','Orders','Order value',''],[...customers.values()].map(c=>'<tr><td><b>'+e(c.name)+'</b></td><td>'+e(c.email)+'</td><td>'+c.orders+'</td><td>'+cash(c.spend)+'</td><td>'+link(href('/admin/orders',{customer:c.email}),'View orders ↗','text-link')+'</td></tr>').join('')||'<tr><td colspan="5">No customer orders yet.</td></tr>');
 }
 function salesTables(orders) {
   const revenue=new Map(), products=new Map();
