@@ -216,7 +216,7 @@ function purchaseShortcuts(orders) {
   const shortcuts=[
     ['Saved Items','heart',href('/saved'),state.products.filter(p=>p.status==='Published'&&state.saved.includes(p.id)).length],
     ['In Cart','bag',href('/cart'),items],
-    ['To Receive','truck',href('/orders',{view:'receive'}),orders.filter(o=>o.status==='Shipped').length],
+    ['To Receive','truck',href('/orders',{view:'receive'}),orders.filter(o=>o.paymentStatus==='paid'&&o.status==='Shipped').length],
     ['To Rate','star',href('/orders',{view:'rate'}),orders.reduce((sum,o)=>sum+pendingReviewItems(o).length,0)],
     ['Coupon','coupon',href('/offers'),state.coupons.filter(c=>c.active).length]
   ];
@@ -309,7 +309,7 @@ export function orders(params=new URLSearchParams()) {
   const label=Object.hasOwn(purchaseTabs,view)?purchaseTabs[view]:id?'Order details':'Purchase History';
   const nav=crumb(go('/account','My account'),label)+'<div class="page-title"><h1>'+label+'</h1></div>';
   if(!state.account) return nav+empty('Sign in to see your orders','Sign in to view your order history.',go('/account','Sign in','btn primary'));
-  const purchases=buyerOrders();
+  const purchases=view==='receive'?buyerOrders().filter(o=>o.paymentStatus==='paid'):buyerOrders();
   const order=id?purchases.find(o=>o.id===id):null;
   const stage=trackingStages.find(item=>item.key===params.get('stage'))??
     trackingStages.find(item=>item.status===order?.status)??trackingStages[1];
@@ -330,14 +330,15 @@ export function orders(params=new URLSearchParams()) {
         empty(emptyCopy[0],emptyCopy[1],go('/orders','View Purchase History','btn outline')))+'</div>';
   }
   return nav+(!purchases.length?empty('No orders yet','Orders you place in this browser appear here.',go('/shop','Browse products','btn primary')):
-    '<div class="panel table-wrap"><table><thead><tr><th>Order</th><th>Products</th><th>Date</th><th>Status</th><th>Total</th><th></th></tr></thead><tbody>'+purchases.map(o=>'<tr><td>'+e(o.id)+'</td><td>'+orderItemsPreview(o.items,{showRating:true})+'</td><td>'+e(o.date)+'</td><td>'+badge(o.status)+'</td><td>'+cash(o.totals.total)+'</td><td><div class="purchase-history-actions">'+link(href('/orders',{id:o.id}),'View order ↗','text-link')+repurchaseButton(o)+'</div></td></tr>').join('')+'</tbody></table></div>');
+    '<div class="panel table-wrap"><table><thead><tr><th>Order</th><th>Products</th><th>Date</th><th>Status</th><th>Total</th><th></th></tr></thead><tbody>'+purchases.map(o=>'<tr><td>'+e(o.id)+'</td><td>'+orderItemsPreview(o.items,{showRating:true})+'</td><td>'+e(o.date)+'</td><td>'+buyerOrderBadge(o)+'</td><td>'+cash(o.totals.total)+'</td><td><div class="purchase-history-actions">'+link(href('/orders',{id:o.id}),'View order ↗','text-link')+repurchaseButton(o)+'</div></td></tr>').join('')+'</tbody></table></div>');
 }
+const buyerOrderBadge=(order,label)=>order.paymentStatus==='pending'?badge('Pending','Payment pending'):badge(order.status,label);
 export function orderDisplay(o,{buyerTracking=false}={}) {
   if(!o) return '';
   const stage=buyerTracking?trackingStages.find(item=>item.status===o.status):null;
   const tracking=o.tracking||(buyerTracking&&o.status!=='Processing'?'Not available':'Awaiting shipment');
-  return '<div class="panel order-display"><div class="section-title"><div><h2>'+e(o.id)+'</h2><p class="subtle">'+e(o.date)+'</p></div>'+badge(o.status,buyerTracking&&o.status==='Delivered'?'Received':stage?.label)+'</div>'+
-    (o.status==='Cancelled'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
+  return '<div class="panel order-display"><div class="section-title"><div><h2>'+e(o.id)+'</h2><p class="subtle">'+e(o.date)+'</p></div>'+buyerOrderBadge(o,buyerTracking&&o.status==='Delivered'?'Received':stage?.label)+'</div>'+
+    (o.status==='Cancelled'||o.paymentStatus==='pending'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
     '<p class="subtle">'+(o.livePayment?'':'Simulated order · No charge. ')+'Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
 }
 export function confirmation(params,result) {

@@ -67,3 +67,25 @@ test('date filtering and monthly test sales exclude cancelled and unpaid orders'
   assert.doesNotMatch(revenue,/S\$20\.00|S\$30\.00/);
  }finally{state.adminOrders=old;}
 });
+
+test('customer order value uses paid live sales and the order link filters by exact email',()=>{
+ const previous=state.adminOrders;
+ try {
+  const row={name:'Fixture',email:'buyer+shop@example.invalid',status:'Processing',livePayment:true,paymentStatus:'paid',date:'2026-11-24',items:[],totals:{total:500}};
+  state.adminOrders=[
+   {...row,id:'CVM-LIVE'},
+   {...row,id:'CVM-SIMULATED',livePayment:false},
+   {...row,id:'CVM-PENDING',paymentStatus:'pending'},
+   {...row,id:'CVM-REFUNDED',paymentStatus:'refunded'},
+   {...row,id:'CVM-CANCELLED',status:'Cancelled'},
+   {...row,id:'CVM-OTHER',email:'otherbuyer+shop@example.invalid'}
+  ];
+  const customers=adminPage('customers',undefined,new URLSearchParams());
+  assert.match(customers,/buyer\+shop@example\.invalid<\/td><td>5<\/td><td>S\$5\.00/);
+  assert.match(customers,/#\/admin\/orders\?customer=buyer%2Bshop%40example\.invalid/);
+  const orders=adminPage('orders',undefined,new URLSearchParams({customer:row.email}));
+  assert.match(orders,/CVM-LIVE/);
+  assert.match(orders,/CVM-PENDING/);
+  assert.doesNotMatch(orders,/CVM-OTHER/);
+ } finally {state.adminOrders=previous;}
+});

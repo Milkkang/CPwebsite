@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {state} from '../dist/store.js';
-import {card,cart,checkout,confirmation,detail,info,shopFrame} from '../dist/shop.js';
+import {card,cart,checkout,confirmation,detail,info,orders,shopFrame} from '../dist/shop.js';
 
 test('guests cannot add products to a browser basket',()=>{
  const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
@@ -57,8 +57,23 @@ test('Stripe return refreshes the member cart until the signed webhook is visibl
  assert.match(source,/async function refreshCheckoutReturn\(sessionId\)/);
  assert.match(source,/Promise\.allSettled\(\[loadMemberShopping\(\),loadOrders\(\)\]\)/);
  assert.match(source,/\/api\/checkout\/status/);
- assert.match(source,/history\.replaceState\(null,'','#\/confirmation'\)/);
+ assert.match(source,/history\.replaceState\(\{\.\.\.history\.state,checkoutSession\},'','#\/confirmation'\)/);
+ assert.match(source,/const sessionId=history\.state\?\.checkoutSession/);
  assert.match(source,/case 'confirmation':[\s\S]*refreshCheckoutReturn\(returnSession\)/);
+});
+
+test('pending orders are visible in purchase history and excluded from To Ship',()=>{
+ const previous={account:state.account,orders:state.orders};
+ try {
+  const email='buyer@example.invalid';
+  state.account={email};
+  const order={email,status:'Processing',date:'2026-11-24',items:[],totals:{total:500}};
+  state.orders=[{...order,id:'CVM-PENDING',paymentStatus:'pending'},{...order,id:'CVM-PAID',paymentStatus:'paid'}];
+  const tracking=orders(new URLSearchParams('view=receive&stage=to-ship'));
+  assert.match(tracking,/CVM-PAID/);
+  assert.doesNotMatch(tracking,/CVM-PENDING/);
+  assert.match(orders(),/CVM-PENDING.*Payment pending/);
+ } finally {Object.assign(state,previous);}
 });
 
 test('admin order loading includes email audit status and a controlled resend action',async()=>{
