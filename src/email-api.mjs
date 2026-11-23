@@ -16,17 +16,27 @@ function configReady(env){
   typeof env.TRANSACTIONAL_EMAIL_REPLY_TO==='string'&&env.TRANSACTIONAL_EMAIL_REPLY_TO.includes('@')&&allowedRecipients(env).size>0;
 }
 function template(job){
- const number=escape(job.payload?.orderNumber??'Test order'),total=money(job.payload?.total??0),tracking=escape(job.payload?.tracking??'');
+ const number=String(job.payload?.orderNumber??'').replace(/[\r\n]+/g,' ').trim();
+ const order=number?'Order '+number:'Your order';
+ const tracking=job.payload?.tracking;
+ const total=money(job.payload?.total??0);
  const content={
-  order_confirmation:['Test order confirmed',`We received test order ${number}. Total: ${total}.`,`We received <strong>${number}</strong>. Test total: <strong>${total}</strong>.`],
-  shipment:['Test order shipped',`Test order ${number} has shipped. Tracking: ${tracking}.`,`<strong>${number}</strong> has shipped. Tracking: <strong>${tracking}</strong>.`],
-  delivery:['Test order delivered',`Test order ${number} has been marked as delivered.`,`<strong>${number}</strong> has been marked as delivered.`],
-  cancellation:['Test order cancelled',`Test order ${number} was cancelled.`,`<strong>${number}</strong> was cancelled.`],
-  test_refund:['Test refund recorded',`A Stripe sandbox refund was recorded for ${number}.`,`A Stripe sandbox refund was recorded for <strong>${number}</strong>.`]
+  order_confirmation:['Order confirmed',order+' has been confirmed.','Order total: '+total],
+  shipment:['Order shipped',order+' is on its way.',tracking?'Tracking number: '+tracking:''],
+  delivery:['Order delivered',order+' has been marked as delivered.'],
+  cancellation:['Order cancelled',order+' has been cancelled.'],
+  test_refund:['Refund recorded','A simulated refund was recorded for '+(number?'order '+number:'your order')+'.']
  }[job.kind];
  if(!content)throw Error('UNKNOWN_EMAIL_KIND');
- return {subject:`[TEST ORDER] ${content[0]} · ${number}`,text:`CP Value Mart — TEST ORDER\n\n${content[1]}\n\nNo real payment or revenue is involved.`,
-  html:`<!doctype html><html><body><h1>${content[0]}</h1><p>${content[2]}</p><p><strong>TEST ORDER:</strong> No real payment or revenue is involved.</p></body></html>`};
+ const [title,...details]=content;
+ const notice='This update is for a simulated order. No funds were transferred.';
+ const subject='CP Value Mart · '+title+(number?' · '+number:'')+' (simulated)';
+ const lines=details.filter(Boolean);
+ return {
+  subject,
+  text:['CP Value Mart',title,...lines,notice].join('\n\n'),
+  html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title></head><body style="margin:0;background:#f3f6f2;color:#1f2d25;font-family:Arial,sans-serif;font-size:16px;line-height:1.5"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fff"><tr><td style="padding:28px"><p style="margin:0;color:#24533b;font-weight:bold">CP Value Mart</p><h1 style="margin:16px 0;font-size:24px">${escape(title)}</h1>${lines.map(line=>`<p style="margin:0 0 12px">${escape(line)}</p>`).join('')}<p style="margin:24px 0 0;border-top:1px solid #d9e2dc;padding-top:14px;font-size:14px">${escape(notice)}</p></td></tr></table></td></tr></table></body></html>`
+ };
 }
 async function send(job,env){
  if(job.is_test!==true||!allowedRecipients(env).has(String(job.recipient).toLowerCase()))return {success:false,retryable:false,error:'RECIPIENT_NOT_ALLOWED'};

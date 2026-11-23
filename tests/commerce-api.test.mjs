@@ -29,6 +29,30 @@ test('checkout derives the order total on the server and creates only a Stripe t
  });
 });
 
+test('checkout availability and session creation use the same account restrictions',async()=>{
+ const path='/api/checkout/session';
+ let approved=false;
+ let member={...account,email:'shopper@example.invalid'};
+ await mocked(async(url,options)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account:member,isAdmin:false});
+  assert.match(String(url),/is_checkout_tester$/);
+  assert.deepEqual(JSON.parse(options.body),{p_user:userId});
+  return Response.json(approved);
+ },async()=>{
+  assert.equal((await (await call(path)).json()).available,false);
+  const denied=await call(path,{addressId});
+  assert.equal(denied.status,403);
+  assert.equal((await denied.json()).error.message,'Online ordering is currently unavailable.');
+  approved=true;
+  assert.equal((await (await call(path)).json()).available,true);
+  member={...account,verified:false};
+  assert.equal((await (await call(path)).json()).available,false);
+  assert.equal((await call(path,{addressId})).status,403);
+  member=account;
+  assert.equal((await (await call(path)).json()).available,true);
+ });
+});
+
 test('checkout rejects cross-site requests and missing test credentials before order creation',async()=>{
  await mocked(async url=>{if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin:false});throw Error('Unexpected network request');},async()=>{
   assert.equal((await call('/api/checkout/session',{addressId},{origin:'https://attacker.example'})).status,403);

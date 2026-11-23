@@ -55,7 +55,7 @@ test('date filtering and monthly test sales exclude cancelled and unpaid orders'
   assert.match(orders,/Showing 1–2 of 2 orders/);assert.doesNotMatch(orders,/CVM-3/);
   const revenue=adminPage('revenue',undefined,new URLSearchParams('year=2026'));
   assert.equal((revenue.match(/class="sales-month"/g)||[]).length,12);
-  assert.match(revenue,/1 test order · S\$12\.50/);
+  assert.match(revenue,/1 simulated order · S\$12\.50/);
   assert.match(revenue,/\/admin\/orders\?from=2026-11-20&amp;to=2026-11-20/);
   assert.doesNotMatch(revenue,/S\$20\.00|S\$30\.00/);
  }finally{state.orders=old;}

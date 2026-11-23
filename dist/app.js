@@ -14,6 +14,14 @@ let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersOwner='',ordersLoading=false;
 let checkoutReturnRefresh='';
+let checkoutAccess;
+function loadCheckoutAccess(owner){
+ const check={owner,available:null};
+ checkoutAccess=check;
+ authRequest('/api/checkout/session').then(data=>{check.available=data.available===true;})
+  .catch(()=>{check.available=false;})
+  .finally(()=>{if(checkoutAccess===check&&route().path==='/checkout')render();});
+}
 const trafficPending=new Set(),trafficRecorded=new Set();
 const trafficDay=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function trackTraffic(event){
@@ -270,6 +278,7 @@ function render({scroll=false}={}) {
   if(publicCatalog)ensureStorefront(path,params);
   const remote=publicCatalog&&storefront.key===storefrontKey(path,params)?storefront:null;
   if(key!=='cart') repurchaseResult=null;
+  if(key!=='checkout'||checkoutAccess?.owner!==state.account?.id)checkoutAccess=undefined;
   let body='';
   if(publicCatalog&&!remote) body='<section class="empty" role="status"><h2>Loading catalog…</h2></section>';
   else if(publicCatalog&&remote.error) body=storefrontFailure(remote.error);
@@ -295,8 +304,9 @@ function render({scroll=false}={}) {
       }
       case 'cart': body=cart(repurchaseResult);break;
       case 'checkout': {
-        if(auth.account&&deliveryAddresses()===null)queueMicrotask(loadAddresses);
-        body=checkout(deliveryAddresses());break;
+        if(state.account&&!checkoutAccess)loadCheckoutAccess(state.account.id);
+        if(checkoutAccess?.available&&deliveryAddresses()===null)queueMicrotask(loadAddresses);
+        body=checkout(deliveryAddresses(),checkoutAccess?.available);break;
       }
       case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
       case 'orders': body=orders(params);break;
@@ -432,17 +442,13 @@ document.addEventListener('submit', async event=>{
       error='Use the secure sign-in form.';break;
     case 'checkout-form': {
       const button=event.submitter??form.querySelector('button');if(button)button.disabled=true;
-      const status=form.querySelector('[data-checkout-status]');if(status){status.hidden=false;status.textContent='Creating secure Stripe test checkout…';}
+      const status=form.querySelector('[data-checkout-status]');if(status){status.hidden=false;status.textContent='Opening Stripe checkout…';}
       try{const result=await authRequest('/api/checkout/session',{addressId:String(f.addressId),coupon:state.coupon||''});
-        if(!result.testMode||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Test checkout could not be verified.');
+        if(!result.testMode||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Checkout could not be verified.');
         location.assign(result.checkoutUrl);return;
       }catch(problem){error=problem.message;if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
       break;
     }
-    case 'contact-form':
-      form.reset();
-      document.getElementById('contact-status').textContent='Demo enquiry submitted. This preview does not send email.';
-      break;
     case 'buyer-review-form':
       error=saveBuyerReview(form.dataset.order,form.dataset.sku,Number(f.rating),f.comment);
       if(!error) {modal.close();render();message('Rating submitted.');} break;
@@ -551,7 +557,7 @@ document.addEventListener('click', async event=>{
   } else if('remove' in data) {try{await setShoppingCart(data.remove,0);render();}catch(error){message(error.message);}}
   else if('resendEmail' in data) {
     if(button.disabled)return;button.disabled=true;
-    try{await authRequest('/api/admin/email-jobs',{action:'resend',jobId:data.resendEmail});adminProductsLoaded=false;await loadAdminProducts();message('Email queued for another test delivery.');}
+    try{await authRequest('/api/admin/email-jobs',{action:'resend',jobId:data.resendEmail});adminProductsLoaded=false;await loadAdminProducts();message('Email queued for delivery.');}
     catch(error){button.disabled=false;message(error.message);}return;
   }
   else if('receiveOrder' in data) {
@@ -583,17 +589,17 @@ document.addEventListener('click', async event=>{
     const order=state.orders.find(row=>row.id===data.orderId);
     if(!order?.backendId)return;
     const restock=Boolean(document.getElementById('refund-restock')?.checked);
-    if(!window.confirm(data.orderAction==='refund'?'Refund this TEST payment and close the order'+(restock?' with stock returned?':' without returning stock?'):'Cancel this unpaid TEST order?'))return;
+    if(!window.confirm(data.orderAction==='refund'?'Refund this simulated payment and close the order'+(restock?' with stock returned?':' without returning stock?'):'Cancel this unpaid simulated order?'))return;
     button.disabled=true;
-    try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});adminProductsLoaded=false;await loadAdminProducts();message('Test order operation completed.');}
+    try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});adminProductsLoaded=false;await loadAdminProducts();message('Order updated.');}
     catch(error){message(error.message);button.disabled=false;}
   } else if('editCoupon' in data) showModal(couponEditor(data.editCoupon));
   else if(data.export==='revenue') {
     exportRevenueReport(route().params);
     message('Revenue report generated.');
   } else if('export' in data) exportData(data.export);
-  else if('reset' in data) showModal('<div class="form-stack"><h2 id="dialog-title">Reset preview?</h2><p>This clears the changes and demo orders made in this browser.</p><button class="btn primary" data-confirm-reset>Reset demo data</button></div>');
-  else if('confirmReset' in data) {reset();modal.close();render();message('Preview reset.');}
+  else if('reset' in data) showModal('<div class="form-stack"><h2 id="dialog-title">Clear browser data?</h2><p>This clears the shopping data stored in this browser.</p><button class="btn primary" data-confirm-reset>Clear browser data</button></div>');
+  else if('confirmReset' in data) {reset();modal.close();render();message('Browser data cleared.');}
   else if('confirmImport' in data) {
     try {
       const products=prepareProductImport(csvToImport);

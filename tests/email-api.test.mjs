@@ -21,7 +21,7 @@ test('email worker sends only an allowlisted test recipient with a stable idempo
   throw Error('Unexpected request '+url);
  },async()=>assert.deepEqual(await processEmailJobs(env),{processed:1,configured:true}));
  assert.equal(sent.headers['Idempotency-Key'],job.idempotency_key);assert.deepEqual(sent.body.to,[job.recipient]);
- assert.match(sent.body.subject,/\[TEST ORDER\]/);assert.equal(finished.p_success,true);assert.equal(finished.p_provider_id,'email_test_1');
+ assert.equal(sent.body.subject,'CP Value Mart · Order confirmed · CVM-1004 (simulated)');assert.match(sent.body.html,/S\$13\.40/);assert.equal(finished.p_success,true);assert.equal(finished.p_provider_id,'email_test_1');
 });
 
 test('email worker fails closed before Resend when the test recipient is not allowlisted',async()=>{
@@ -48,7 +48,7 @@ test('delivery notice remains a single allowlisted test email',async()=>{
   throw Error('Unexpected request '+url);
  },async()=>assert.deepEqual(await processEmailJobs(env),{processed:1,configured:true}));
  assert.deepEqual(sent.to,['acceptance@example.invalid']);
- assert.match(sent.subject,/^\[TEST ORDER\] Test order delivered/);
+ assert.match(sent.subject,/^CP Value Mart · Order delivered/);
  assert.match(sent.text,/marked as delivered/);
 });
 
@@ -79,8 +79,8 @@ test('cancellation and sandbox refund templates stay labelled and allowlisted',a
   throw Error('Unexpected request '+url);
  },async()=>assert.deepEqual(await processEmailJobs(env),{processed:2,configured:true}));
  assert.equal(sent.length,2);
- for(const message of sent){assert.deepEqual(message.to,['acceptance@example.invalid']);assert.match(message.subject,/^\[TEST ORDER\]/);assert.match(message.text,/No real payment or revenue/);}
- assert.match(sent[0].subject,/cancelled/);assert.match(sent[1].subject,/refund/);
+ for(const message of sent){assert.deepEqual(message.to,['acceptance@example.invalid']);assert.match(message.subject,/\(simulated\)$/);assert.match(message.text,/No funds were transferred/);assert.doesNotMatch(message.subject+message.text+message.html,/\b(test|sandbox|demo)\b/i);}
+ assert.match(sent[0].subject,/cancelled/);assert.match(sent[1].subject,/Refund recorded/);
 });
 
 async function signedWebhook(event,id='msg_test_1'){
