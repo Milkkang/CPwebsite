@@ -1,6 +1,6 @@
 import {productFileCsv} from './import-file.js';
-import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
-import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
+import {auth,authGeneration,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
+import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,buyerOrders,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder,loadPreviewPreferences,previewStorageKey,obsoletePreviewStorageKey} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
 import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
@@ -9,10 +9,16 @@ const app=document.getElementById('app'), toast=document.getElementById('toast')
 const imageDialog=document.getElementById('image-dialog');
 let lastPath='', lastProductView='', toastTimer, receiptTimer;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
-let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
+let adminProductsLoaded=false,adminProductsRequest=null,adminProductsError='';
+let adminOrderAccess=null,adminOrderAccessTimer;
+let adminOrderSearch='';
+let renderedProductEditor=null,heldProductEditor=null;
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
-let ordersOwner='',ordersLoading=false;
-let checkoutReturnRefresh='';
+let ordersRequest=null,ordersLoaded=false,orderDetail=null;
+const orderUuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+const orderNumberPattern=/^CVM-[1-9][0-9]{0,18}$/;
+let checkoutReturn=null;
+let checkoutAddressOwner='';
 const trafficPending=new Set(),trafficRecorded=new Set();
 const trafficDay=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function trackTraffic(event){
@@ -25,31 +31,111 @@ function trackTraffic(event){
   .then(response=>{if(response.ok){trafficRecorded.add(key);try{sessionStorage.setItem(key,'1');}catch{}}})
   .catch(()=>{}).finally(()=>trafficPending.delete(key));
 }
-function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,createdAt:row.createdAt,date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(row.createdAt)),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
+function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,createdAt:row.createdAt,date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(row.createdAt)),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',deliveryName:row.address?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
  items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty})),
  totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt};}
 async function loadOrders(){
- const owner=auth.account?.id;if(!owner||auth.recoveryOnly)return;
- ordersLoading=true;try{const result=await authRequest('/api/orders');if(auth.account?.id===owner){state.orders=result.orders.map(mapOrder);ordersOwner=owner;}}
- catch(error){message(error.message);}finally{ordersLoading=false;render();}
+ if(!auth.account||auth.recoveryOnly)return;
+ const request={};
+ ordersRequest=request;
+ try{
+  const result=await authRequest('/api/orders');
+  if(ordersRequest===request){state.orders=result.orders.map(mapOrder);ordersLoaded=true;}
+ }catch(error){if(ordersRequest===request)message(error.message);}
+ finally{if(ordersRequest===request){ordersRequest=null;render();}}
 }
-async function refreshCheckoutReturn(sessionId){
- const owner=auth.account?.id;
- if(!owner||!sessionId||checkoutReturnRefresh===sessionId)return;
- checkoutReturnRefresh=sessionId;
- for(let attempt=0;attempt<10&&auth.account?.id===owner;attempt++){
-  try{
-   await Promise.all([loadMemberShopping(),loadOrders()]);
-   if(!Object.keys(state.cart).length&&state.orders.some(order=>order.paymentStatus==='paid'))return;
-  }catch{}
-  await new Promise(resolve=>setTimeout(resolve,1000));
+async function loadOrderDetail(detail){
+ if(orderDetail!==detail||location.hash!==detail.hash)return;
+ try{
+  const result=await authRequest('/api/orders?'+new URLSearchParams({id:detail.id}));
+  if(orderDetail!==detail||location.hash!==detail.hash||auth.account?.id!==detail.owner)return;
+  detail.order=result.orders[0]?mapOrder(result.orders[0]):null;
+  if(detail.order&&orderNumberPattern.test(detail.id)&&orderUuid.test(detail.order.backendId)){
+   const params=new URLSearchParams(detail.hash.split('?')[1]);
+   detail.id=detail.order.backendId;
+   params.set('id',detail.id);
+   detail.hash=href('/orders',Object.fromEntries(params));
+   history.replaceState(history.state,'',detail.hash);
+  }
+ }catch(error){detail.error=error.message;}
+ finally{detail.loading=false;if(orderDetail===detail)render();}
+}
+function buyerOrderPage(params){
+ const rawId=(params.get('id')??'').trim(),owner=auth.account?.id;
+ const id=orderUuid.test(rawId)?rawId.toLowerCase():rawId.toUpperCase();
+ if(!owner||params.getAll('id').length!==1||!orderUuid.test(id)&&!orderNumberPattern.test(id))return orders(params);
+ if(!orderDetail||orderDetail.owner!==owner||orderDetail.hash!==location.hash){
+  const detail={id,owner,hash:location.hash,loading:true};
+  orderDetail=detail;
+  queueMicrotask(()=>loadOrderDetail(detail));
  }
+ if(orderDetail.loading)return '<div class="page-title"><h1>Order details</h1><p role="status">Loading order…</p></div>';
+ if(orderDetail.error)return '<div class="page-title"><h1>Order details</h1><p role="alert">'+e(orderDetail.error)+'</p></div><a class="btn outline" href="#/orders">View Purchase History</a>';
+ return orders(params,orderDetail.order);
+}
+function buyerOrderForAction(id){
+ const direct=orderDetail?.order;
+ if(direct?.id===id&&orderDetail.hash===location.hash)return direct;
+ return buyerOrders().find(order=>order.id===id);
+}
+function checkoutSessionId(params){
+ const sessions=params.getAll('session_id');
+ return sessions.length===1&&/^cs_test_[A-Za-z0-9_]{1,200}$/.test(sessions[0])?sessions[0]:'';
+}
+function clearCheckoutReturn(){
+ checkoutReturn?.controller.abort();
+ checkoutReturn=null;
+}
+function checkoutReturnResult(sessionId){
+ const owner=auth.account?.id;
+ if(!owner||!sessionId||auth.recoveryOnly){clearCheckoutReturn();return {status:'unavailable'};}
+ if(checkoutReturn?.sessionId!==sessionId||checkoutReturn.owner!==owner){
+  clearCheckoutReturn();
+  const check={owner,sessionId,status:'checking',controller:new AbortController()};
+  checkoutReturn=check;
+  queueMicrotask(()=>refreshCheckoutReturn(check));
+ }
+ return checkoutReturn;
+}
+async function refreshCheckoutReturn(check){
+ const {signal}=check.controller;
+ if(signal.aborted)return;
+ const path='/api/checkout/status?'+new URLSearchParams({session_id:check.sessionId});
+ const timeout=setTimeout(()=>{
+  if(signal.aborted)return;
+  check.controller.abort();
+  check.status='timeout';
+  render();
+ },15000);
+ try{
+  while(!signal.aborted){
+   const {orderId,orderNumber,paymentStatus}=await authRequest(path,undefined,{signal});
+   if(paymentStatus!=='pending'){
+    Object.assign(check,{status:paymentStatus,orderNumber,orderId});
+    render();
+    if(paymentStatus==='paid'){
+     loadOrders();
+     loadMemberShopping().catch(()=>{});
+    }
+    return;
+   }
+   if(check.orderNumber!==orderNumber){check.orderNumber=orderNumber;render();}
+   await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+ }catch(error){
+  if(signal.aborted)return;
+  check.status=error.code==='CHECKOUT_NOT_FOUND'?'unavailable':'error';
+  if(check.status==='unavailable')delete check.orderNumber;
+  render();
+ }finally{clearTimeout(timeout);}
 }
 async function loadAdminProducts() {
-  if(!auth.isAdmin||adminProductsLoading)return;
-  adminProductsLoading=true;adminProductsError='';
+  if(!auth.isAdmin||auth.recoveryOnly||adminProductsRequest)return;
+  const request={};
+  adminProductsRequest=request;adminProductsError='';
   try{
     const [result,config,orderResult,emailResult,searchResult,categoryResult,trafficResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs'),authRequest('/api/admin/search'),authRequest('/api/admin/categories'),authRequest('/api/admin/traffic').then(data=>({data})).catch(error=>({error:error.message}))]);
+    if(adminProductsRequest!==request)return;
     state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
     state.adminCategories=categoryResult.categories;
     categories.splice(0,categories.length,...categoryResult.categories.map(row=>[row.id,row.name,row.icon??'',row.color??'sage']));
@@ -63,13 +149,46 @@ async function loadAdminProducts() {
     deliveryVersion=config.delivery?.version??0;
     state.coupons=config.coupons.map(row=>({code:row.code,type:row.kind,amount:row.amount,min:row.minimum_cents,active:row.active}));
     couponVersions=new Map(config.coupons.map(row=>[row.code,row.version]));
-    state.orders=orderResult.orders.map(row=>({...mapOrder(row),emailJobs:emailResult.jobs.filter(job=>job.orderId===row.id)}));
+    state.adminOrders=orderResult.orders.map(row=>({...mapOrder(row),emailJobs:emailResult.jobs.filter(job=>job.orderId===row.id)}));
     adminProductsLoaded=true;
-  }catch(error){adminProductsError=error.message;adminProductsLoaded=false;}
-  finally{adminProductsLoading=false;render();}
+  }catch(error){if(adminProductsRequest===request){adminProductsError=error.message;adminProductsLoaded=false;}}
+  finally{if(adminProductsRequest===request){adminProductsRequest=null;render();}}
+}
+function checkAdminOrderRoute(key) {
+  if(adminOrderAccess?.key===key)return adminOrderAccess;
+  clearTimeout(adminOrderAccessTimer);
+  adminOrderAccess?.controller?.abort();
+  adminOrderAccess=key?{key,allowed:false,error:''}:null;
+  if(adminOrderAccess)verifyAdminOrderRoute(adminOrderAccess);
+  return adminOrderAccess;
+}
+async function verifyAdminOrderRoute(check) {
+  const controller=new AbortController();
+  check.controller=controller;
+  const timeout=setTimeout(()=>controller.abort(),10_000);
+  const wasAllowed=check.allowed;
+  try {
+    const access=await authRequest('/api/admin/access',undefined,{signal:controller.signal});
+    if(adminOrderAccess!==check)return;
+    if(access.account?.id!==auth.account?.id){refreshSession();return;}
+    if(!access.isAdmin||access.recoveryOnly)throw Error('Administrator access is required.');
+    check.allowed=true;
+    check.error='';
+    adminOrderAccessTimer=setTimeout(()=>verifyAdminOrderRoute(check),30_000);
+    if(!wasAllowed)render();
+  }catch(error){
+    if(adminOrderAccess!==check)return;
+    check.allowed=false;
+    check.error=error.name==='AbortError'?'Unable to verify administrator access. Please try again.':error.message;
+    state.adminOrders=[];
+    adminProductsLoaded=false;adminProductsRequest=null;
+    render();
+  }finally{clearTimeout(timeout);check.controller=null;}
 }
 async function writeAdminProduct(sku,version,fields,stock) {
+  const generation=authGeneration;
   const result=await authRequest('/api/admin/products',{sku,version,fields,...(stock===undefined?{}:{stock})});
+  if(generation!==authGeneration)return;
   const product=listingFromApi(result.product,{admin:true});
   rememberListings([product]);
   return product;
@@ -86,7 +205,7 @@ function homepagePayload(values) {
   return content;
 }
 const cents=value=>/^\d+(?:\.\d{1,2})?$/.test(String(value))?Math.round(Number(value)*100):NaN;
-function productFormPayload(form,data) {
+function productFormPayload(data) {
   const one=name=>String(data.get(name)??'').trim();
   const sku=one('sku'),variantSku=one('variantSku');
   if(data.getAll('variantSku').length!==1||variantSku!==sku)throw Error('Each listing uses one variant with the same SKU as the product.');
@@ -102,12 +221,76 @@ function productFormPayload(form,data) {
   if(!fields.name||!fields.variant_name||!fields.brand||!categories.some(([id])=>id===fields.category_id))throw Error('Complete the product name, variant, brand and category.');
   return {sku,fields,stock};
 }
+function productEditorStatus(form,text) {
+  const status=form.querySelector('[data-product-status]');
+  status.textContent=text;
+  status.hidden=!text;
+}
+function applyProductEditorResult(form,hash,owner,apply) {
+  if(location.hash!==hash)return;
+  if(heldProductEditor?.form===form){
+    heldProductEditor.complete=()=>applyProductEditorResult(form,hash,owner,apply);
+  }else if(auth.isAdmin&&!auth.recoveryOnly&&auth.account?.id===owner&&app.querySelector('#product-editor')===form){
+    apply();
+  }
+}
+function rememberAdminProduct(row) {
+  const product=listingFromApi(row,{admin:true});
+  if((findProduct(product.id)?.version??0)<=product.version)rememberListings([product]);
+}
+async function saveProductEditor(form,data) {
+  const saveButton=form.querySelector('[data-product-save]'),reloadButton=form.querySelector('[data-reload-product]');
+  if(saveButton.disabled)return;
+  const editorHash=location.hash,owner=auth.account?.id;
+  saveButton.disabled=true;
+  productEditorStatus(form,'');
+  try{
+    const {sku,fields,stock}=productFormPayload(data);
+    const {product}=await authRequest('/api/admin/products',{sku,version:Number(form.dataset.version),fields,stock});
+    applyProductEditorResult(form,editorHash,owner,()=>{
+      rememberAdminProduct(product);
+      navigate('/admin/products',Object.fromEntries(route().params));
+      message('Product saved.');
+    });
+  }catch(error){
+    applyProductEditorResult(form,editorHash,owner,()=>{
+      if(error.code==='VERSION_CONFLICT'&&form.dataset.id){
+        reloadButton.hidden=false;
+        productEditorStatus(form,'This product changed in another session. Reload the latest product to replace your unsaved inputs, then review the fields before saving.');
+      }else{
+        saveButton.disabled=false;
+        productEditorStatus(form,error.message);
+      }
+    });
+  }
+}
+async function reloadProductEditor(button) {
+  const form=button.closest('#product-editor');
+  if(!form||button.disabled||button.hidden)return;
+  const sku=form.dataset.id,editorHash=location.hash,owner=auth.account?.id;
+  button.disabled=true;
+  try{
+    const {products}=await authRequest('/api/admin/products?'+new URLSearchParams({sku}));
+    applyProductEditorResult(form,editorHash,owner,()=>{
+      if(products.length)rememberAdminProduct(products[0]);
+      else state.products=state.products.filter(product=>product.id!==sku);
+      render({replaceProductEditor:true});
+      const refreshed=app.querySelector('#product-editor');
+      if(refreshed)productEditorStatus(refreshed,'Latest product loaded. Review the fields before saving.');
+    });
+  }catch(error){
+    applyProductEditorResult(form,editorHash,owner,()=>{
+      button.disabled=false;
+      productEditorStatus(form,error.message+' Reload the latest product before saving.');
+    });
+  }
+}
 let shoppingOwner,shoppingLoading=false;
 async function loadMemberShopping() {
-  const owner=auth.account?.id;
-  if(!owner||auth.recoveryOnly)return;
+  const generation=authGeneration;
+  if(!auth.account||auth.recoveryOnly)return;
   const result=await authRequest('/api/shopping');
-  if(auth.account?.id!==owner)return;
+  if(generation!==authGeneration)return;
   state.cart=Object.fromEntries(result.cart.map(item=>[item.sku,item.quantity]));
   state.saved=result.saved;
   state.recentlyViewed=result.recent.map(sku=>({id:sku,sku}));
@@ -115,7 +298,8 @@ async function loadMemberShopping() {
   render();
 }
 async function syncShopping() {
-  const owner=auth.account?.id??'';
+  const generation=authGeneration;
+  const owner=auth.recoveryOnly?'':auth.account?.id??'';
   if(owner===shoppingOwner||shoppingLoading)return;
   shoppingOwner=owner;
   if(!owner){state.cart={};state.saved=[];state.recentlyViewed=[];save();render();return;}
@@ -126,8 +310,8 @@ async function syncShopping() {
   shoppingLoading=true;
   try{
     await loadMemberShopping();
-  }catch(error){message(error.message);}
-  finally{shoppingLoading=false;render();}
+  }catch(error){if(generation===authGeneration)message(error.message);}
+  finally{if(generation===authGeneration){shoppingLoading=false;render();}}
 }
 async function setShoppingCart(sku,quantity) {
   if(auth.account&&!auth.recoveryOnly){
@@ -227,11 +411,30 @@ const previousAdminRoutes=new Map([
   ['/admin/reports','/admin'],['/admin/media','/admin/products'],['/admin/inventory','/admin/products']
 ]);
 const privateBuyerRoutes=new Set(['/cart','/orders','/saved','/recently-viewed','/confirmation']);
+function clearOrderRoute(ownerChanged,adminAccessLost) {
+  const [path,query='']=location.hash.slice(1).split('?');
+  const params=new URLSearchParams(query);
+  let destination=path;
+  if(ownerChanged&&['/orders','/tracking','/confirmation'].includes(path))params.delete('id');
+  if((ownerChanged||adminAccessLost)&&(path==='/admin'||path.startsWith('/admin/'))){
+    params.delete('q');
+    if(path.startsWith('/admin/orders/'))destination='/admin/orders';
+  }
+  if(destination!==path||params.toString()!==new URLSearchParams(query).toString()){
+    history.replaceState(history.state,'',href(destination,Object.fromEntries(params)));
+  }
+}
 function route() {
   const hash=location.hash.slice(1) || (location.pathname==='/'||location.pathname.endsWith('.html')?'/':location.pathname);
   const [path,qs='']=hash.split('?');
   let destination=previousAdminRoutes.get(path)??path;
-  let params=Object.fromEntries(new URLSearchParams(qs));
+  const query=new URLSearchParams(qs);
+  let params=Object.fromEntries(query);
+  const legacyOrderSearch=/^\/admin\/orders(?:\/|$)/.test(path)&&query.has('q')&&!auth.loading;
+  if(legacyOrderSearch){
+    if(auth.isAdmin&&!auth.recoveryOnly)adminOrderSearch=params.q;
+    delete params.q;
+  }
   const section='/'+path.replace(/^\//,'').split('/')[0];
   if(section==='/tracking') {
     destination='/orders';
@@ -239,11 +442,15 @@ function route() {
   } else if(privateBuyerRoutes.has(section)) {
     destination=section;
   }
+  if(destination==='/confirmation'){
+    const sessionId=checkoutSessionId(query);
+    params=sessionId?{session_id:sessionId}:{};
+  }
   if(!state.account&&!auth.loading&&privateBuyerRoutes.has(destination)) {
     params={next:href(destination,params).slice(1)};
     destination='/account';
   }
-  if(destination!==path) history.replaceState(history.state,'',href(destination,params));
+  if(destination!==path||legacyOrderSearch)history.replaceState(history.state,'',href(destination,params));
   return {path:destination,params:new URLSearchParams(params)};
 }
 function returnAfterSignIn(next) {
@@ -251,16 +458,43 @@ function returnAfterSignIn(next) {
   if(path==='checkout'||path==='/checkout') return navigate('/checkout');
   if(path==='/admin'&&auth.isAdmin)return navigate('/admin');
   if(/^\/product\/[A-Za-z0-9_-]{1,100}$/.test(path))return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
+  if(path==='/confirmation'){
+    const sessionId=checkoutSessionId(new URLSearchParams(qs));
+    return sessionId?navigate(path,{session_id:sessionId}):navigate('/account');
+  }
   if(privateBuyerRoutes.has(path)) return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
   navigate('/account');
 }
-function render({scroll=false}={}) {
+function render({scroll=false,replaceProductEditor=false}={}) {
   state.account=auth.account&&!auth.recoveryOnly?auth.account:null;
   refreshReceipts();
   const {path,params}=route();
+  if(path!=='/confirmation')clearCheckoutReturn();
+  if(path!=='/orders'||!params.has('id'))orderDetail=null;
   const [key='',id='',object='']=path.replace(/^\//,'').split('/');
   const admin=key==='admin';
-  if(admin&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
+  const adminOrderRoute=admin&&['','orders','customers','revenue'].includes(id);
+  const orderAccess=checkAdminOrderRoute(adminOrderRoute&&auth.isAdmin&&!auth.recoveryOnly?location.hash||path:'');
+  if(admin&&auth.isAdmin&&(!orderAccess||orderAccess.allowed)&&!adminProductsLoaded&&!adminProductsRequest&&!adminProductsError)loadAdminProducts();
+  if(orderAccess?.allowed&&adminProductsLoaded&&id==='orders'&&orderNumberPattern.test(object)){
+    const backendId=state.adminOrders.find(order=>order.id===object)?.backendId;
+    if(orderUuid.test(backendId)){
+      orderAccess.key=href('/admin/orders/'+backendId,Object.fromEntries(params));
+      history.replaceState(history.state,'',orderAccess.key);
+    }
+  }
+  const editorRoute=admin&&id==='products'&&object?path+'?'+params:'';
+  const editorKey=editorRoute&&auth.isAdmin&&!auth.recoveryOnly?auth.account?.id+'|'+editorRoute:'';
+  const editorForm=editorRoute&&app.querySelector('#product-editor');
+  // Keep unsaved inputs paired with the version rendered when the editor opened.
+  if(editorForm&&editorKey===renderedProductEditor?.key&&!replaceProductEditor)return;
+  // Detach the form during session verification and restore it only for the same administrator.
+  if(auth.loading&&editorForm&&editorRoute===renderedProductEditor?.route){
+    heldProductEditor={...renderedProductEditor,form:editorForm};
+  }
+  if(heldProductEditor&&(heldProductEditor.route!==editorRoute||(!auth.loading&&heldProductEditor.key!==editorKey))){
+    heldProductEditor=null;
+  }
   const productView=key==='product'?path+'?'+(params.get('sku')??''):'';
   const publicCatalog=['','shop','search','categories','category','product','cart','offers'].includes(key);
   if(publicCatalog&&path!==lastPath&&storefront.key===storefrontKey(path,params))storefront={key:'',data:null,error:null};
@@ -270,9 +504,11 @@ function render({scroll=false}={}) {
   let body='';
   if(publicCatalog&&!remote) body='<section class="empty" role="status"><h2>Loading catalog…</h2></section>';
   else if(publicCatalog&&remote.error) body=storefrontFailure(remote.error);
+  else if(key==='orders'&&!params.has('id')&&ordersRequest&&!ordersLoaded)body='<section class="panel narrow"><h1>Purchase History</h1><p role="status">Loading your orders…</p></section>';
   else if((auth.loading&&privateBuyerRoutes.has(path))||(shoppingLoading&&['cart','saved','recently-viewed'].includes(key)))body='<section class="panel narrow"><h1>My account</h1><p role="status">Loading your shopping list…</p></section>';
+  else if(orderAccess&&!orderAccess.allowed)body='<main class="wrap" id="main"><section class="panel narrow"><h1>Administrator access</h1><p role="status">'+e(orderAccess.error||'Checking administrator access…')+'</p>'+(orderAccess.error?'<button class="btn outline" data-retry-admin-order-access>Retry</button>':'')+'</section></main>';
   else if(admin) body=auth.isAdmin&&!auth.recoveryOnly?
-    !adminProductsLoaded?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':adminPage(id,object,params):adminGate();
+    !adminProductsLoaded&&!replaceProductEditor?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':adminPage(id,object,params,adminOrderSearch):adminGate();
   else {
     switch(key) {
       case '': body=home(remote.data.products);break;
@@ -290,15 +526,15 @@ function render({scroll=false}={}) {
       }
       case 'cart': body=cart(repurchaseResult);break;
       case 'checkout': {
-        if(auth.account&&deliveryAddresses()===null)queueMicrotask(loadAddresses);
+        const owner=state.account?.id??'';
+        if(owner&&(path!==lastPath||owner!==checkoutAddressOwner))loadAddresses();
+        checkoutAddressOwner=owner;
         body=checkout(deliveryAddresses());break;
       }
       case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
-      case 'orders': body=orders(params);break;
+      case 'orders': body=buyerOrderPage(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
-      case 'confirmation':
-        if(auth.account&&!auth.recoveryOnly)queueMicrotask(()=>refreshCheckoutReturn(params.get('session_id')));
-        body=confirmation(params);break;
+      case 'confirmation': body=confirmation(checkoutReturnResult(params.get('session_id')));break;
       case 'saved': body=savedPage();break;
       case 'offers': body=offers();break;
       default: body=info(key);
@@ -306,9 +542,17 @@ function render({scroll=false}={}) {
   }
   document.body.classList.toggle('admin-body',admin);
   app.innerHTML=admin?body:shopFrame(body,params.get('q')??'',{showAdminLink:key!=='account'});
+  renderedProductEditor=editorKey?{key:editorKey,route:editorRoute}:null;
+  if(heldProductEditor?.key===editorKey&&adminProductsLoaded){
+    const {form,complete}=heldProductEditor;
+    app.querySelector('#product-editor')?.replaceWith(form);
+    heldProductEditor=null;
+    if(complete)queueMicrotask(complete);
+  }
   if(!admin)trackTraffic('visit');
   const heading=app.querySelector('h1');
-  document.title=(key&&heading?heading.textContent+' · ':'')+'CP Value Mart';
+  const title=admin&&id==='orders'&&object?'Order details':key&&heading?heading.textContent:'';
+  document.title=(title?title+' · ':'')+'CP Value Mart';
   if(scroll&&path!==lastPath) window.scrollTo(0,0);
   lastPath=path;
   if(!productView)lastProductView='';
@@ -329,10 +573,22 @@ function showModal(content) {
   modal.showModal();
   modal.querySelector('input, select, [data-confirm-reset], [data-confirm-import]')?.focus();
 }
+async function checkAdminAccess(generation) {
+  try {
+    const access=await authRequest('/api/admin/access');
+    if(generation!==authGeneration)return false;
+    if(access.account?.id===auth.account?.id)return true;
+    refreshSession();
+  } catch(error){
+    if(generation===authGeneration){refreshSession();message(error.message);}
+  }
+  return false;
+}
 const cleanParams = obj => Object.fromEntries(Object.entries(obj).filter(([,v])=>typeof v==='string'&&v.trim()).map(([k,v])=>[k,v.trim()]));
 let csvToImport, repurchaseResult;
 
 document.addEventListener('submit', async event=>{
+  const generation=authGeneration;
   const form=event.target;
   if(!form.id) return;
   event.preventDefault();
@@ -354,7 +610,8 @@ document.addEventListener('submit', async event=>{
     finally {if(button?.isConnected)button.disabled=false;}
     return;
   }
-  if(location.hash.startsWith('#/admin')) {try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
+  if(form.id==='product-editor'){await saveProductEditor(form,data);return;}
+  if(location.hash.startsWith('#/admin')&&!await checkAdminAccess(generation))return;
 
   let error;
   switch(form.id) {
@@ -363,8 +620,14 @@ document.addEventListener('submit', async event=>{
       navigate(q?'/search':'/shop',q?{q}:{});
       break;
     }
-    case 'catalog-filters': case 'admin-filter':
-      navigate(form.dataset.path,cleanParams(f)); break;
+    case 'catalog-filters': case 'admin-filter': {
+      const filters=cleanParams(f);
+      if(form.dataset.path==='/admin/orders'){
+        adminOrderSearch=filters.q??'';
+        delete filters.q;
+      }
+      navigate(form.dataset.path,filters);break;
+    }
     case 'revenue-period-form':
       error=revenueDateError(f.from,f.to);
       if(!error) navigate('/admin/revenue',{range:'custom',from:f.from,to:f.to,metric:f.metric});
@@ -387,9 +650,10 @@ document.addEventListener('submit', async event=>{
       const button=event.submitter??form.querySelector('button');if(button)button.disabled=true;
       const status=form.querySelector('[data-checkout-status]');if(status){status.hidden=false;status.textContent='Creating secure Stripe test checkout…';}
       try{const result=await authRequest('/api/checkout/session',{addressId:String(f.addressId),coupon:state.coupon||''});
+        if(generation!==authGeneration)return;
         if(!result.testMode||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Test checkout could not be verified.');
         location.assign(result.checkoutUrl);return;
-      }catch(problem){error=problem.message;if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
+      }catch(problem){if(generation!==authGeneration)return;error=problem.message;if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
       break;
     }
     case 'contact-form':
@@ -397,19 +661,16 @@ document.addEventListener('submit', async event=>{
       document.getElementById('contact-status').textContent='Demo enquiry submitted. This preview does not send email.';
       break;
     case 'buyer-review-form':
-      error=saveBuyerReview(form.dataset.order,form.dataset.sku,Number(f.rating),f.comment);
+      error=saveBuyerReview(form.dataset.order,form.dataset.sku,Number(f.rating),f.comment,buyerOrderForAction(form.dataset.order));
       if(!error) {modal.close();render();message('Rating submitted.');} break;
-    case 'product-editor':
-      try{const payload=productFormPayload(form,data);const existing=form.dataset.id?findProduct(form.dataset.id):null;
-        await writeAdminProduct(payload.sku,existing?.version??0,payload.fields,payload.stock);
-        navigate('/admin/products',Object.fromEntries(route().params));message('Product saved.');}
-      catch(problem){error=problem.message;}break;
     case 'order-editor': {
-      const order=state.orders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
+      const order=state.adminOrders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
       if(!order?.backendId){error='Order not found.';break;}
       try{await authRequest('/api/admin/orders',{orderId:order.backendId,version:order.version,status:shipItem?'Shipped':String(data.get('status')),tracking:String(data.get('tracking')??'').trim()});
-        adminProductsLoaded=false;await loadAdminProducts();message(shipItem?'Item shipped.':'Fulfilment saved.');}
-      catch(problem){error=problem.message;}break;
+        if(generation!==authGeneration)return;
+        adminProductsLoaded=false;await loadAdminProducts();
+        if(generation===authGeneration)message(shipItem?'Item shipped.':'Fulfilment saved.');}
+      catch(problem){if(generation===authGeneration)error=problem.message;}break;
     }
     case 'coupon-editor':
       try{const code=String(data.get('code')??'').trim().toUpperCase(),kind=String(data.get('type')??''),number=Number(data.get('amount'));
@@ -440,15 +701,19 @@ document.addEventListener('submit', async event=>{
   if(error) message(error);
 });
 document.addEventListener('click', async event=>{
+  const generation=authGeneration;
   const button=event.target.closest('button');
   if(!button) return;
   const data=button.dataset;
   if('authRetry'in data){await refreshSession();return;}
+  if('retryCheckoutStatus'in data){clearCheckoutReturn();render();return;}
+  if('retryAdminOrderAccess'in data){checkAdminOrderRoute('');render();return;}
   if('retryAdmin'in data){adminProductsError='';loadAdminProducts();return;}
+  if('reloadProduct'in data){await reloadProductEditor(button);return;}
   if('retryCatalog'in data){storefront={key:'',data:null,error:null};pendingStorefront='';render();return;}
   if('defaultAddress'in data){if(button.disabled)return;button.disabled=true;try{await authRequest('/api/addresses/'+data.defaultAddress,{action:'default'});await loadAddresses();message('Default delivery address saved.');}catch(error){button.disabled=false;message(error.message);}return;}
   if('deleteAddress'in data){try{await authRequest('/api/addresses/'+data.deleteAddress,{action:'delete'});await loadAddresses();}catch(error){message(error.message);}return;}
-  if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
+  if(location.hash.startsWith('#/admin')&&!await checkAdminAccess(generation))return;
   if('orderGroups' in data){for(const group of document.querySelectorAll('.order-date-group'))group.open=data.orderGroups==='expand';}
   else if('imagePreview' in data) openImage(button);
   else if('closeImage' in data) imageDialog.close();
@@ -473,7 +738,7 @@ document.addEventListener('click', async event=>{
     [...document.querySelectorAll('[data-quick-add]')].find(b=>b.dataset.quickAdd===sku)?.focus({preventScroll:true});
     message('Added '+added+' × '+row.product.name+' ('+row.variant.name+') to your basket.');
   } else if('repurchase' in data) {
-    const result=repurchaseOrder(data.repurchase);
+    const result=repurchaseOrder(data.repurchase,buyerOrderForAction(data.repurchase));
     if(result.error) return message(result.error);
     repurchaseResult=result;
     navigate('/cart');
@@ -486,17 +751,23 @@ document.addEventListener('click', async event=>{
   else if('signOut' in data) {try{await signOut();navigate('/account');message('Signed out.');}catch(error){message(error.message);}}
   else if('resendEmail' in data) {
     if(button.disabled)return;button.disabled=true;
-    try{await authRequest('/api/admin/email-jobs',{action:'resend',jobId:data.resendEmail});adminProductsLoaded=false;await loadAdminProducts();message('Email queued for another test delivery.');}
-    catch(error){button.disabled=false;message(error.message);}return;
+    try{await authRequest('/api/admin/email-jobs',{action:'resend',jobId:data.resendEmail});
+      if(generation!==authGeneration)return;
+      adminProductsLoaded=false;await loadAdminProducts();
+      if(generation===authGeneration)message('Email queued for another test delivery.');}
+    catch(error){if(generation===authGeneration){button.disabled=false;message(error.message);}}return;
   }
   else if('receiveOrder' in data) {
-    const order=state.orders.find(row=>row.id===data.receiveOrder);
+    const order=buyerOrderForAction(data.receiveOrder);
     if(!order?.backendId)return;
     button.disabled=true;
-    try{await authRequest('/api/orders/receipt',{orderId:order.backendId,version:order.version});await loadOrders();navigate('/orders',{view:'receive',stage:'delivered'});message('Receipt confirmed.');}
-    catch(error){button.disabled=false;message(error.message);}
+    try{await authRequest('/api/orders/receipt',{orderId:order.backendId,version:order.version});
+      if(generation!==authGeneration)return;
+      await loadOrders();
+      if(generation===authGeneration){navigate('/orders',{view:'receive',stage:'delivered'});message('Receipt confirmed.');}}
+    catch(error){if(generation===authGeneration){button.disabled=false;message(error.message);}}
   } else if('rateOrder' in data) {
-    const item=reviewItem(data.rateOrder,data.rateSku);
+    const item=reviewItem(data.rateOrder,data.rateSku,buyerOrderForAction(data.rateOrder));
     if(item) showModal(buyerReviewDialog(data.rateOrder,item));
     else message('This item is unavailable for review.');
   } else if('copy' in data) {
@@ -515,13 +786,16 @@ document.addEventListener('click', async event=>{
     const row=getVariant(data.stock);
     if(row) showModal(stockEditor(data.stock,row.variant,row.product));
   } else if('orderAction' in data) {
-    const order=state.orders.find(row=>row.id===data.orderId);
+    const order=state.adminOrders.find(row=>row.id===data.orderId);
     if(!order?.backendId)return;
     const restock=Boolean(document.getElementById('refund-restock')?.checked);
     if(!window.confirm(data.orderAction==='refund'?'Refund this TEST payment and close the order'+(restock?' with stock returned?':' without returning stock?'):'Cancel this unpaid TEST order?'))return;
     button.disabled=true;
-    try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});adminProductsLoaded=false;await loadAdminProducts();message('Test order operation completed.');}
-    catch(error){message(error.message);button.disabled=false;}
+    try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});
+      if(generation!==authGeneration)return;
+      adminProductsLoaded=false;await loadAdminProducts();
+      if(generation===authGeneration)message('Test order operation completed.');}
+    catch(error){if(generation===authGeneration){message(error.message);button.disabled=false;}}
   } else if('editCoupon' in data) showModal(couponEditor(data.editCoupon));
   else if(data.export==='revenue') {
     exportRevenueReport(route().params);
@@ -550,7 +824,7 @@ document.addEventListener('input',event=>{
 });
 document.addEventListener('change',async event=>{
   const input=event.target;
-  if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
+  if(location.hash.startsWith('#/admin')&&!await checkAdminAccess(authGeneration))return;
   if(input.dataset.inline) {
     const row=getVariant(input.dataset.sku);
     if(!row){message('Product no longer exists.');return;}
@@ -589,15 +863,37 @@ document.addEventListener('change',async event=>{
   }
 });
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'){storefront={key:'',data:null,error:null};adminProductsLoaded=false;refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}
+  if(document.visibilityState==='visible'){storefront={key:'',data:null,error:null};refreshSession();}
 });
-window.addEventListener('pageshow',event=>{if(event.persisted){storefront={key:'',data:null,error:null};refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}});
-window.addEventListener('hashchange',()=>{if(imageDialog.open)imageDialog.close();if(modal.open)modal.close();render({scroll:true});});
+window.addEventListener('pageshow',event=>{if(event.persisted){storefront={key:'',data:null,error:null};refreshSession();}});
+window.addEventListener('hashchange',()=>{if(imageDialog.open)imageDialog.close();if(modal.open)modal.close();checkAdminOrderRoute('');render({scroll:true});});
 window.addEventListener('storage',event=>{
-  if(event.key==='cvm-preview-13m-20261118-v1'&&event.newValue) {
-    try {Object.assign(state,JSON.parse(event.newValue),{account:null});render();} catch {}
-  }
+  if(event.key===previewStorageKey||event.key===obsoletePreviewStorageKey){loadPreviewPreferences({storageEvent:true});render();}
 });
-setAuthListener(()=>{if(auth.account?.id!==shoppingOwner)adminProductsLoaded=false;if(auth.account?.id&&auth.account.id!==ordersOwner&&!ordersLoading)loadOrders();render();syncShopping();});
-render();
+let pageSession=authGeneration,orderOwner='',adminAccess=false,previousOrderLocation='';
+setAuthListener(()=>{
+  if(pageSession!==authGeneration){
+    pageSession=authGeneration;
+    previousOrderLocation||=location.href;
+    ordersRequest=null;ordersLoaded=false;orderDetail=null;
+    clearCheckoutReturn();
+    checkAdminOrderRoute('');
+    adminProductsRequest=null;adminProductsLoaded=false;adminProductsError='';
+    state.orders=[];state.adminOrders=[];
+    shoppingOwner=undefined;shoppingLoading=false;
+    state.cart={};state.saved=[];state.recentlyViewed=[];
+    repurchaseResult=null;
+    if(modal.open)modal.close();
+    modal.innerHTML='';toast.textContent='';toast.hidden=true;
+  }
+  if(auth.loading){render();return;}
+  const owner=auth.recoveryOnly?'':auth.account?.id??'';
+  if(owner!==orderOwner||!auth.isAdmin)adminOrderSearch='';
+  if(previousOrderLocation===location.href){
+    clearOrderRoute(Boolean(orderOwner&&orderOwner!==owner),adminAccess&&!auth.isAdmin);
+  }
+  previousOrderLocation='';orderOwner=owner;adminAccess=auth.isAdmin;
+  if(owner&&!ordersLoaded&&!ordersRequest)loadOrders();
+  render();syncShopping();
+});
 refreshSession();

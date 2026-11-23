@@ -50,7 +50,7 @@ function revenueSelection(params,today=orderDate()) {
   const custom=requested==='custom'&&!dateError;
   const range=custom?'custom':periods.some(([key])=>key===requested)?requested:'1m';
   const period=custom?{from,to}:orderPeriod(range,today);
-  const orders=state.orders.filter(o=>o.date>=period.from&&o.date<=period.to).sort((a,b)=>b.date.localeCompare(a.date));
+  const orders=state.adminOrders.filter(o=>o.date>=period.from&&o.date<=period.to).sort((a,b)=>b.date.localeCompare(a.date));
   return {range,period,orders,dateError};
 }
 const orderRevenue=()=>0;
@@ -76,11 +76,11 @@ function revenuePage(params) {
 }
 function testSalesCalendar(params){
  const currentYear=Number(orderDate().slice(0,4));
- const years=[...new Set([currentYear,...state.orders.map(o=>Number(o.date.slice(0,4)))])].filter(Number.isSafeInteger).sort((a,b)=>b-a);
+ const years=[...new Set([currentYear,...state.adminOrders.map(o=>Number(o.date.slice(0,4)))])].filter(Number.isSafeInteger).sort((a,b)=>b-a);
  const requested=Number(params.get('year'));
  const year=years.includes(requested)?requested:currentYear;
  const monthNames=Array.from({length:12},(_,i)=>new Intl.DateTimeFormat('en-SG',{month:'long',timeZone:'UTC'}).format(new Date(Date.UTC(year,i,1))));
- const paid=state.orders.filter(o=>o.paymentStatus==='paid'&&o.status!=='Cancelled'&&o.date.startsWith(String(year)));
+ const paid=state.adminOrders.filter(o=>o.paymentStatus==='paid'&&o.status!=='Cancelled'&&o.date.startsWith(String(year)));
  const byDay=new Map();
  for(const order of paid){const day=byDay.get(order.date)??{count:0,total:0};day.count++;day.total+=order.totals.total;byDay.set(order.date,day);}
  const months=monthNames.map((name,index)=>{
@@ -99,7 +99,7 @@ function overview(params) {
   const metric=params.get('metric')??'sales';
   const filters={range,metric};
   const {from,to}=orderPeriod(range);
-  const periodOrders=state.orders.filter(o=>o.date>=from&&o.date<=to);
+  const periodOrders=state.adminOrders.filter(o=>o.date>=from&&o.date<=to);
   const valid=periodOrders.filter(o=>o.status!=='Cancelled');
   const traffic=state.traffic?.filter(row=>row.day>=from&&row.day<=to)??[];
   return heading('Overview','TEST MODE · Simulated orders; real revenue S$0.00.',go('/admin/products/new','Add product','btn primary'))+
@@ -128,13 +128,13 @@ function listPagination(path,params,paging,total,noun){
   numbers.map((n,i)=>(i&&n-numbers[i-1]>1?'<span aria-hidden="true">…</span>':'')+(n===page?'<span class="btn primary small" aria-current="page">'+n+'</span>':pageLink(n,String(n)))).join('')+
   (page<pages?pageLink(page+1,'Next'):'<span class="btn outline small" aria-disabled="true">Next</span>')+'</div></nav>';
 }
-function ordersPage(params){
- const q=params.get('q')??'',status=params.get('status')??'';
+function ordersPage(params,q){
+ const status=params.get('status')??'';
  const from=params.get('from')??'',to=params.get('to')??'';
  const dateError=from||to?revenueDateError(from,to):'';
  const group=['day','week','month','quarter','year'].includes(params.get('group'))?params.get('group'):'day';
  const sort=params.get('sort')==='oldest'?'oldest':'newest';
- const rows=state.orders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(!status||o.status===status)&&(dateError||!from||o.date>=from)&&(dateError||!to||o.date<=to));
+ const rows=state.adminOrders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(q.toLowerCase())&&(!status||o.status===status)&&(dateError||!from||o.date>=from)&&(dateError||!to||o.date<=to));
  const sorted=groupOrders(rows,'day',sort).flatMap(g=>g.orders),paging=listPage(params,rows.length);
  const groups=groupOrders(sorted.slice(paging.start,paging.start+paging.size),group,sort);
  const filters={...Object.fromEntries(params),group,sort,size:paging.size,page:paging.page,origin:'orders'};
@@ -215,7 +215,7 @@ export function productEditor(id,params=new URLSearchParams()) {
   if(id!=='new'&&!existing) return empty('Product not found','Return to the product list.',go('/admin/products','View products','btn primary'));
   const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]};
   return link(href('/admin/products',Object.fromEntries(params)),'← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
-    '<form id="product-editor" data-id="'+e(existing?.id??'')+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
+    '<form id="product-editor" data-id="'+e(existing?.id??'')+'" data-version="'+e(existing?.version??0)+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
     field('Product name','name',p.name,'required maxlength="500"')+field('Brand','brand',p.brand,'required maxlength="70"')+
     field('Parent SKU','sku',p.sku,'required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+" '+(existing?'readonly':''))+
     '<label>Category<select name="category">'+cats(p.category)+'</select></label><label>Status<select name="status">'+opts(['Draft','Published','Archived'],p.status)+'</select></label>'+
@@ -224,23 +224,26 @@ export function productEditor(id,params=new URLSearchParams()) {
     field('Search keywords','keywords',p.keywords,'maxlength="300" placeholder="English names, 中文 keywords, common abbreviations"')+
     field('R2 image URL','image',p.image,'maxlength="350" placeholder="https://…"')+'</section>'+
     '<section class="panel form-stack"><div class="section-title"><h2>Listing, stock and price</h2></div><p class="subtle">Each SKU is one listing. Enter the same SKU in both fields.</p><div id="variant-fields">'+(p.variants.length?p.variants:[{name:'',sku:'',price:0,stock:0,min:1,image:''}]).slice(0,1).map((v,i)=>variantFields(v,i,p,false)).join('')+'</div></section>'+
-    '<div class="button-row"><button class="btn primary">Save product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
+    '<p class="notice" data-product-status role="alert" hidden></p><div class="button-row"><button type="submit" class="btn primary" data-product-save>Save product</button>'+
+    '<button type="button" class="btn outline" data-reload-product hidden>Reload latest product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
 }
 function ordersTable(rows,filters) {
-  return table(['Order','Customer','Products','Date','Status','Total',''],rows.map(o=>'<tr><td><b>'+e(o.id)+'</b></td><td>'+e(o.name)+'</td><td>'+orderItemsPreview(o.items)+'</td><td>'+e(o.date)+'</td><td>'+badge(o.status)+'</td><td>'+cash(o.totals.total)+'</td><td>'+link(href('/admin/orders/'+o.id,filters),'Open ↗','text-link')+'</td></tr>').join('')||'<tr><td colspan="7">No matching orders for this period.</td></tr>');
+  return table(['Order','Customer','Products','Date','Status','Total',''],rows.map(o=>'<tr><td><b>'+e(o.id)+'</b></td><td>'+e(o.name)+'</td><td>'+orderItemsPreview(o.items)+'</td><td>'+e(o.date)+'</td><td>'+badge(o.status)+'</td><td>'+cash(o.totals.total)+'</td><td>'+link(href('/admin/orders/'+(o.backendId??o.id),filters),'Open ↗','text-link')+'</td></tr>').join('')||'<tr><td colspan="7">No matching orders for this period.</td></tr>');
 }
 function orderEditor(id,params) {
-  const o=state.orders.find(o=>o.id===id);
+  const o=state.adminOrders.find(o=>o.backendId===id||o.id===id);
   const {origin,...filters}=Object.fromEntries(params);
   const back=href(origin==='revenue'?'/admin/revenue':origin==='orders'?'/admin/orders':'/admin',filters);
   if(!o) return empty('Order not found','Return to the order list.',link(back,'View orders','btn primary'));
+  const delivery=o.deliveryName?'<p>'+e(o.deliveryName)+'<br>'+e(o.address)+'<br>Singapore '+e(o.postal)+'</p>':
+    '<p>Delivery address unavailable for this order.</p>';
   const emailJobs=o.emailJobs??[];
   const emailPanel='<section class="panel"><h2>Transactional email</h2><p class="subtle">Test recipients are restricted by the server allowlist.</p>'+
     (emailJobs.length?'<div class="table-wrap"><table><thead><tr><th>Type</th><th>Status</th><th>Recipient</th><th>Attempts</th><th></th></tr></thead><tbody>'+emailJobs.map(job=>
       '<tr><td>'+e(job.kind.replaceAll('_',' '))+'</td><td>'+badge(job.status)+'</td><td>'+e(job.recipient)+'</td><td>'+e(job.attempts)+'</td><td>'+(['failed','bounced'].includes(job.status)?'<button type="button" class="btn small outline" data-resend-email="'+e(job.id)+'">Resend</button>':'—')+'</td></tr>').join('')+'</tbody></table></div>':'<p>No email task has been queued for this order.</p>')+'</section>';
   return link(back,origin==='revenue'?'← Revenue order history':origin==='orders'?'← Orders':'← Overview orders','text-link')+heading(e(o.id),'Simulated payment · '+e(o.date))+'<div class="two-col">'+orderDisplay(o)+
-    '<div class="form-stack"><section class="panel"><h2>Delivery address</h2><p>'+e(o.name)+'<br>'+e(o.address)+'<br>Singapore '+e(o.postal)+'</p><p>'+e(o.email)+'</p></section>'+
-    '<form class="panel form-stack" id="order-editor" data-order="'+e(id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>'+opts(o.status==='Processing'?['Processing','Shipped']:o.status==='Shipped'?['Shipped','Delivered']:[o.status],o.status)+'</select></label>'+
+    '<div class="form-stack"><section class="panel"><h2>Delivery address</h2>'+delivery+'<p>'+e(o.email)+'</p></section>'+
+    '<form class="panel form-stack" id="order-editor" data-order="'+e(o.id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>'+opts(o.status==='Processing'?['Processing','Shipped']:o.status==='Shipped'?['Shipped','Delivered']:[o.status],o.status)+'</select></label>'+
     field('Courier tracking number','tracking',o.tracking,'maxlength="50" '+(o.status==='Cancelled'?'readonly':''))+
     '<div class="button-row">'+(o.status==='Processing'&&o.paymentStatus==='paid'?'<button type="submit" class="btn primary" name="ship-item">Ship Item</button>':'')+
     '<button type="submit" class="btn '+(o.status==='Processing'?'outline':'primary')+'" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>Save fulfilment</button></div></form>'+(['pending','paid'].includes(o.paymentStatus)?'<section class="panel form-stack"><h2>Test order operations</h2><p>No real funds are involved. A completed refund closes the order.</p><label class="check-label"><input type="checkbox" id="refund-restock"'+checked(o.status==='Processing')+'> Return items to stock (confirm items are available)</label><button type="button" class="btn outline" data-order-action="'+e(o.paymentStatus==='pending'?'cancel':'refund')+'" data-order-id="'+e(o.id)+'">'+(o.paymentStatus==='pending'?'Cancel unpaid test order':'Refund test payment')+'</button></section>':'')+emailPanel+'</div></div>';
@@ -251,7 +254,7 @@ function couponPage() {
 }
 function customersPage() {
   const customers=new Map();
-  for(const o of state.orders) {
+  for(const o of state.adminOrders) {
     const c=customers.get(o.email)??{name:o.name,email:o.email,orders:0,spend:0};
     c.orders++;
     if(o.status!=='Cancelled') c.spend+=o.totals.total;
@@ -319,13 +322,13 @@ function settingsPage() {
     '<form class="panel form-stack narrow" id="settings-form"><h2>Singapore delivery</h2>'+amountInput('Standard delivery charge (SGD)','shipping',state.settings.shipping)+
     amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>';
 }
-export function adminPage(page,id,params) {
+export function adminPage(page,id,params,orderSearch='') {
   let body;
   switch(page) {
     case '': body=overview(params); break;
     case 'revenue': body=revenuePage(params);break;
     case 'products': body=id?productEditor(id,params):productList(params);break;
-    case 'orders': return adminFrame(params.get('origin')==='revenue'?'revenue':'orders',id?orderEditor(id,params):ordersPage(params));
+    case 'orders': return adminFrame(params.get('origin')==='revenue'?'revenue':'orders',id?orderEditor(id,params):ordersPage(params,orderSearch));
     case 'customers': body=customersPage();break;
     case 'coupons': body=couponPage();break;
     case 'search': body=searchPage();break;
@@ -385,7 +388,7 @@ export function storeProduct(form,values) {
   if(variants.some(v=>!v.name)) return 'Every variant needs a name.';
   if(variants.some(v=>!/^[A-Z0-9_-]{1,32}$/.test(v.sku)||!Number.isSafeInteger(v.price)||v.price<0||!Number.isInteger(v.stock)||v.stock<0||!Number.isInteger(v.min)||v.min<1)) return 'Enter a valid SKU, price, stock and minimum quantity for every variant.';
   if(new Set(variants.map(v=>v.sku)).size!==variants.length || state.products.some(x=>x!==p&&x.variants.some(v=>variants.some(row=>row.sku===v.sku)))) return 'Every variant needs a unique SKU.';
-  if(p?.variants.some(old=>!variants.some(v=>v.sku===old.sku)&&state.orders.some(o=>o.items.some(item=>item.sku===old.sku)))) return 'A variant used in an order cannot be deleted or have its SKU changed.';
+  if(p?.variants.some(old=>!variants.some(v=>v.sku===old.sku)&&state.adminOrders.some(o=>o.items.some(item=>item.sku===old.sku)))) return 'A variant used in an order cannot be deleted or have its SKU changed.';
   const baseName=values.get('name').trim(), oldOption=p?.variants[0]?.name;
   const name=p&&oldOption&&baseName.endsWith(' · '+oldOption)?baseName.slice(0,-(' · '+oldOption).length):baseName;
   const description=values.get('description').trim();
@@ -411,7 +414,7 @@ export function storeProduct(form,values) {
   save();
 }
 export function saveFulfilment(form,values,shipItem=false) {
-  const o=state.orders.find(o=>o.id===form.dataset.order);
+  const o=state.adminOrders.find(o=>o.id===form.dataset.order);
   if(!o) return 'Order not found.';
   if(shipItem&&o.status!=='Processing') return 'Only orders awaiting shipment can be shipped.';
   return updateOrder(o,shipItem?'Shipped':values.get('status'),values.get('tracking').trim());
@@ -443,7 +446,7 @@ export function exportRevenueReport(params) {
 }
 export function exportData(kind,products=state.products) {
   if(kind==='template') return download('cp-value-mart-import-template.csv',[columns,['CP-900','Sample body wash','Sample Brand','personal-care','Draft',false,'Demo product','body wash','','','', 'CP-900-01','Standard','6.90',20,1,'']]);
-  if(kind==='orders') return download('cp-value-mart-orders.csv',[['order','date','name','status','tracking','total_sgd'],...state.orders.map(o=>[o.id,o.date,o.name,o.status,o.tracking,(o.totals.total/100).toFixed(2)])]);
+  if(kind==='orders') return download('cp-value-mart-orders.csv',[['order','date','name','status','tracking','total_sgd'],...state.adminOrders.map(o=>[o.id,o.date,o.name,o.status,o.tracking,(o.totals.total/100).toFixed(2)])]);
   download('cp-value-mart-products.csv',[columns,...exportRows(products)]);
 }
 export function parseCsv(text) {

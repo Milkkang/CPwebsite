@@ -62,4 +62,14 @@ wait "$race_pid_one"
 wait "$race_pid_two"
 test "$("${PSQL[@]}" -Atc "select stock||':'||reserved_quantity from public.products where sku='RACE-1'")" = '4:0'
 test "$("${PSQL[@]}" -Atc "select string_agg(quantity_before::text,',' order by quantity_before desc) from public.inventory_movements where product_id='RACE-1'")" = '10,7'
-echo 'PASS: isolated PostgreSQL migrations, Phase 6 recovery/concurrency and Phase 7 order/import acceptance'
+"$PG_BIN/createdb" -h "$PG_TEST_DIR" -p "$PG_PORT" cpwebsite_order_delivery
+PSQL_DELIVERY=("$PG_BIN/psql" -h "$PG_TEST_DIR" -p "$PG_PORT" -d cpwebsite_order_delivery -v ON_ERROR_STOP=1 -q)
+sed '/^create role /d' tests/phase6-postgres-bootstrap.sql | "${PSQL_DELIVERY[@]}" >/dev/null
+for migration in supabase/migrations/*.sql; do
+ if [[ "$migration" == supabase/migrations/20261122222057_order_delivery_snapshots.sql ]]; then
+  "${PSQL_DELIVERY[@]}" -f tests/order-delivery-legacy-fixture.sql >/dev/null
+ fi
+ "${PSQL_DELIVERY[@]}" -f "$migration" >/dev/null
+done
+"${PSQL_DELIVERY[@]}" -f tests/order-delivery-database-acceptance.sql >/dev/null
+echo 'PASS: isolated PostgreSQL migrations, Phase 6 recovery/concurrency, Phase 7 order/import and order delivery acceptance'

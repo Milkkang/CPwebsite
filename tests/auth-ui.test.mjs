@@ -43,3 +43,35 @@ test('the account page has no admin shortcut, including for administrator profil
   assert.match(adminGate(),/href="#\/account\?next=\/admin"/);
  }finally{Object.assign(auth,previous);}
 });
+
+test('checkout and the address book keep the current default after a used address is removed',async()=>{
+ const {auth,loadAddresses,deliveryAddresses,addressesPanel}=await import('../dist/auth.js');
+ const {checkout}=await import('../dist/shop.js');
+ const {state}=await import('../dist/store.js');
+ const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
+ const previous={account:state.account,cart:state.cart,authAccount:auth.account,fetch:globalThis.fetch};
+ const used={id:'used-address',full_name:'Original Recipient',address_line:'Test Street 1',postal_code:'000001',is_default:true};
+ const remaining={id:'remaining-address',full_name:'Backup Recipient',address_line:'Test Street 2',postal_code:'000002',is_default:false};
+ let finishOlderRequest;
+ try{
+  state.account=auth.account={id:'address-removal-fixture'};
+  state.cart={[product.id]:product.variants[0].min};
+  globalThis.fetch=async()=>new Promise(resolve=>{finishOlderRequest=resolve;});
+  const olderRequest=loadAddresses();
+  globalThis.fetch=async()=>Response.json({addresses:[{...remaining,is_default:true}]});
+  await loadAddresses();
+  finishOlderRequest(Response.json({addresses:[used,remaining]}));
+  await olderRequest;
+
+  const settings=addressesPanel();
+  const checkoutPage=checkout(deliveryAddresses());
+  assert.doesNotMatch(settings,/used-address|Original Recipient/);
+  assert.match(settings,/Backup Recipient<\/h3>.*>Default<\/strong>/);
+  assert.match(checkoutPage,/<option value="remaining-address" selected>/);
+  assert.doesNotMatch(checkoutPage,/used-address|Original Recipient/);
+ }finally{
+  globalThis.fetch=previous.fetch;
+  auth.account=previous.authAccount;
+  Object.assign(state,{account:previous.account,cart:previous.cart});
+ }
+});

@@ -8,23 +8,49 @@ if(['/auth/confirm','/auth/reset'].includes(initial.pathname)) {
  if(initial.searchParams.get('type')===type&&/^[A-Za-z0-9_-]{32,512}$/.test(token_hash??''))callback={type,token_hash};
  history.replaceState(null,'','/#/account?mode='+ (callback?'verify':'invalid'));
 }
-let expiryTimer, refreshRun=0;
+const signedOut={account:null,isAdmin:false,recoveryOnly:false};
+let expiryTimer;
+export let authGeneration=0;
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('cvm-auth'):null;
 export let onAuthChange=()=>{};
 export function setAuthListener(fn){onAuthChange=fn;channel?.addEventListener('message',()=>refreshSession());}
-export async function authRequest(path,data) {
- const r=await fetch(path,{method:data===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',headers:data===undefined?{}:{'Content-Type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
+function changeSession(next) {
+ const generation=++authGeneration;
+ Object.assign(auth,next);
+ onAuthChange();
+ return generation;
+}
+export async function authRequest(path,data,{signal}={}) {
+ const generation=authGeneration;
+ const r=await fetch(path,{signal,method:data===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',headers:data===undefined?{}:{'Content-Type':'application/json'},...(data===undefined?{}:{body:JSON.stringify(data)})});
  let body;try{body=await r.json();}catch{throw Error('Account service is unavailable. Please try again.');}
- if(!r.ok){if(r.status===401){Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});onAuthChange();}const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;throw error;}
+ signal?.throwIfAborted();
+ if(!r.ok){
+  const error=Error(body.error?.message??'Request failed. Please try again.');error.code=body.error?.code;
+  if(generation===authGeneration&&path!=='/api/auth/session'){
+   if(r.status===401&&['SIGN_IN_REQUIRED','SESSION_EXPIRED'].includes(error.code)){
+    clearTimeout(expiryTimer);changeSession({...signedOut,loading:false,error:''});
+   }
+   else if(error.code==='ADMIN_REQUIRED'&&auth.isAdmin)changeSession({isAdmin:false});
+   else if(error.code==='PASSWORD_RESET_REQUIRED'&&!auth.recoveryOnly)changeSession({isAdmin:false,recoveryOnly:true});
+  }
+  throw error;
+ }
  return body;
 }
 export async function refreshSession() {
- const run=++refreshRun;clearTimeout(expiryTimer);
- try{const data=await authRequest('/api/auth/session');if(run!==refreshRun)return auth;Object.assign(auth,data,{loading:false,error:''});if(data.expiresAt)expiryTimer=setTimeout(refreshSession,Math.max(1000,new Date(data.expiresAt).getTime()-Date.now()+500));}
- catch{if(run!==refreshRun)return auth;Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false,loading:false,error:'Unable to check your session. Try again.'});}
+ clearTimeout(expiryTimer);
+ const generation=changeSession({...signedOut,loading:true,error:''});
+ try{const data=await authRequest('/api/auth/session');if(generation!==authGeneration)return auth;Object.assign(auth,data,{loading:false,error:''});if(data.expiresAt)expiryTimer=setTimeout(refreshSession,Math.max(1000,new Date(data.expiresAt).getTime()-Date.now()+500));}
+ catch{if(generation!==authGeneration)return auth;Object.assign(auth,{...signedOut,loading:false,error:'Unable to check your session. Try again.'});}
  onAuthChange();return auth;
 }
-export async function signOut(){await authRequest('/api/auth/logout',{});Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false});channel?.postMessage('changed');onAuthChange();}
+export async function signOut(){
+ await authRequest('/api/auth/logout',{});
+ clearTimeout(expiryTimer);
+ changeSession({...signedOut,loading:false,error:''});
+ channel?.postMessage('changed');
+}
 const input=(label,name,type='text',extra='')=>'<label>'+label+'<input name="'+name+'" type="'+type+'" '+extra+' required></label>';
 const pass=(autocomplete='current-password')=>input('Password','password','password','autocomplete="'+autocomplete+'" '+(autocomplete==='new-password'?'minlength="12" ':'')+'maxlength="128"');
 export function authForms(params) {
@@ -58,14 +84,27 @@ export function adminGate() {
 }
 export function profilePanel(){return '<section class="panel"><h2>Account details</h2><form id="auth-profile" class="form-stack"><label>Name<input name="name" value="'+e(auth.account?.name)+'" required maxlength="80" autocomplete="name"></label><button class="btn outline">Save name</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
 export function passwordPanel(){return '<section class="panel"><h2>Change password</h2><p>After saving, sign in again with your new password.</p><form id="auth-password" class="form-stack">'+input('Current password','currentPassword','password','autocomplete="current-password" maxlength="128"')+input('New password','password','password','autocomplete="new-password" minlength="12" maxlength="128"')+input('Confirm new password','confirmPassword','password','autocomplete="new-password" minlength="12" maxlength="128"')+'<button class="btn primary">Save password</button><p data-auth-status role="status" class="notice" hidden></p></form></section>';}
-let addresses=null,addressError='',addressOwner='';
-export async function loadAddresses(){try{addresses=(await authRequest('/api/addresses')).addresses;addressError='';addressOwner=auth.account?.id;}catch(error){addresses=[];addressError=error.message;}onAuthChange();}
+let addresses=null,addressError='',addressOwner='',addressRequest=0;
+export async function loadAddresses(){
+ const owner=auth.account?.id;
+ if(!owner)return;
+ const request=++addressRequest;
+ addressOwner=owner;
+ addresses=null;
+ addressError='';
+ let next=[],error='';
+ try{next=(await authRequest('/api/addresses')).addresses;}catch(problem){error=problem.message;}
+ if(request!==addressRequest||owner!==auth.account?.id)return;
+ addresses=next;
+ addressError=error;
+ onAuthChange();
+}
 export function deliveryAddresses(){
  if(addressOwner!==auth.account?.id)return null;
  return addresses;
 }
 export function addressesPanel(){
- if(addressOwner!==auth.account?.id){addresses=null;addressOwner=auth.account?.id;}
- if(addresses===null){addresses=[];queueMicrotask(loadAddresses);}
- return '<section class="panel"><h2>Delivery addresses</h2><p>Your default address is shown first. Select Set default on another address to change it.</p><div role="status">'+e(addressError)+'</div><div class="account-address-list">'+(addresses.length?addresses.map(a=>'<article class="panel address-card"><div class="address-heading"><h3>'+e(a.full_name)+'</h3>'+(a.is_default?'<strong class="badge status-published">Default</strong>':'<button class="btn outline address-default" data-default-address="'+e(a.id)+'" aria-label="Set address for '+e(a.full_name)+' as default">Set default</button>')+'</div><p>'+e(a.address_line)+'<br>Singapore '+e(a.postal_code)+'</p><button class="btn outline" data-delete-address="'+e(a.id)+'">Remove address</button></article>').join(''):'<p class="subtle">No delivery addresses saved yet.</p>')+'</div><details class="add-address"><summary class="text-link">Add address</summary><form id="auth-address" class="form-stack">'+input('Full name','name','text','maxlength="80" autocomplete="name"')+input('Address and unit','address','text','maxlength="200" autocomplete="street-address"')+input('Singapore postal code','postal','text','pattern="[0-9]{6}" inputmode="numeric" maxlength="6" autocomplete="postal-code"')+'<button class="btn primary">Save address</button><p data-auth-status role="status" class="notice" hidden></p></form></details></section>';
+ if(addressOwner!==auth.account?.id)loadAddresses();
+ const list=deliveryAddresses();
+ return '<section class="panel"><h2>Delivery addresses</h2><p>Your default address is shown first. Select Set default on another address to change it.</p><div role="status">'+e(list===null?'Loading delivery addresses…':addressError)+'</div><div class="account-address-list">'+(list===null?'':list.length?list.map(a=>'<article class="panel address-card"><div class="address-heading"><h3>'+e(a.full_name)+'</h3>'+(a.is_default?'<strong class="badge status-published">Default</strong>':'<button class="btn outline address-default" data-default-address="'+e(a.id)+'" aria-label="Set address for '+e(a.full_name)+' as default">Set default</button>')+'</div><p>'+e(a.address_line)+'<br>Singapore '+e(a.postal_code)+'</p><button class="btn outline" data-delete-address="'+e(a.id)+'">Remove address</button></article>').join(''):'<p class="subtle">No delivery addresses saved yet.</p>')+'</div><details class="add-address"><summary class="text-link">Add address</summary><form id="auth-address" class="form-stack">'+input('Full name','name','text','maxlength="80" autocomplete="name"')+input('Address and unit','address','text','maxlength="200" autocomplete="street-address"')+input('Singapore postal code','postal','text','pattern="[0-9]{6}" inputmode="numeric" maxlength="6" autocomplete="postal-code"')+'<button class="btn primary">Save address</button><p data-auth-status role="status" class="notice" hidden></p></form></details></section>';
 }

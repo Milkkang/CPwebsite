@@ -96,16 +96,41 @@ test('signup confirmation verifies email without creating a login session from t
  });
 });
 
-test('default address mutations derive ownership from the session and reject another owner',async()=>{
- const cookie='__Host-cvm-session='+'d'.repeat(64),id='88888888-8888-4888-8888-888888888888';let seen;
+test('member address deletion and default changes bind to the session owner',async()=>{
+ const buyerSession='d'.repeat(64),otherSession='e'.repeat(64);
+ const buyerCookie='__Host-cvm-session='+buyerSession,otherCookie='__Host-cvm-session='+otherSession;
+ const buyerHash=await hash(buyerSession),otherId='77777777-7777-4777-8777-777777777777';
+ const usedId='88888888-8888-4888-8888-888888888888',backupId='99999999-9999-4999-8999-999999999999';
+ const backup={id:backupId,full_name:'Backup Recipient',address_line:'Test address',postal_code:'000001',is_default:true};
+ const changeCalls=[];
  await mocked(async(url,options)=>{
-  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:false,recoveryOnly:false});
-  if(url.includes('change_member_address')){seen=JSON.parse(options.body);return Response.json(null);}
+  const body=JSON.parse(options.body);
+  if(url.includes('resolve_web_session')){
+   const caller=body.p_hash===buyerHash?account:{...account,id:otherId};
+   return Response.json({account:caller,isAdmin:false,recoveryOnly:false});
+  }
+  if(url.includes('change_member_address')){
+   changeCalls.push(body);
+   return Response.json(body.p_user_id===userId?{ok:true}:null);
+  }
+  if(url.includes('read_member_addresses'))return Response.json(body.p_user_id===userId?[backup]:[]);
   throw Error('Unexpected request');
  },async()=>{
-  const r=await run('/api/addresses/'+id,{action:'default'},{cookie});assert.equal(r.status,404);
-  assert.deepEqual(seen,{p_user_id:userId,p_action:'default',p_address_id:id});
-  assert.equal((await run('/api/addresses/'+id,{action:'default',user_id:'another-user'},{cookie})).status,400);
+  for(const action of ['delete','default']){
+   assert.equal((await run('/api/addresses/'+usedId,{action},{cookie:otherCookie})).status,404);
+   assert.equal((await run('/api/addresses/'+usedId,{action,user_id:userId},{cookie:otherCookie})).status,400);
+  }
+  const removed=await run('/api/addresses/'+usedId,{action:'delete'},{cookie:buyerCookie});
+  assert.equal(removed.status,200);
+  assert.equal((await removed.json()).ok,true);
+  const addresses=await run('/api/addresses',undefined,{cookie:buyerCookie});
+  assert.equal(addresses.status,200);
+  assert.deepEqual((await addresses.json()).addresses,[backup]);
+  assert.deepEqual(changeCalls,[
+   {p_user_id:otherId,p_action:'delete',p_address_id:usedId},
+   {p_user_id:otherId,p_action:'default',p_address_id:usedId},
+   {p_user_id:userId,p_action:'delete',p_address_id:usedId}
+  ]);
  });
 });
 
@@ -140,6 +165,82 @@ test('admin product mutations bind actor and version to the verified admin sessi
   assert.deepEqual(write,{p_actor:userId,p_sku:'SKU_1',p_expected_version:4,p_fields:{price_cents:499},p_stock:10});
   assert.equal((await run('/api/admin/products',{...payload,fields:{admin_roles:'all'}},{cookie})).status,400);
   assert.equal((await run('/api/admin/products',payload)).status,401);
+ });
+});
+
+test('a stale product write or import reports a version conflict from PostgREST',async()=>{
+ const cookie='__Host-cvm-session='+'8'.repeat(64);
+ const stale={sku:'SKU_1',version:4,fields:{price_cents:899},stock:10};
+ let conflict={code:'PT409',message:'Product version changed'};
+ await mocked(async url=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:true,recoveryOnly:false});
+  if(url.includes('admin_write_product')||url.includes('admin_import_products')){
+   return Response.json(conflict,{status:conflict.code==='PT409'?409:500});
+  }
+  throw Error('Unexpected database request');
+ },async()=>{
+  for(const code of ['PT409','40001']){
+   conflict={...conflict,code};
+   const response=await run('/api/admin/products',stale,{cookie});
+   assert.equal(response.status,409);
+   const {error}=await response.json();
+   assert.equal(error.code,'VERSION_CONFLICT');
+   assert.match(error.message,/changed.*reload/i);
+   const imported=await run('/api/admin/import',{rows:[stale]},{cookie});
+   assert.equal(imported.status,409);
+   assert.equal((await imported.json()).error.code,'IMPORT_REJECTED');
+  }
+ });
+});
+
+test('an unavailable product write stays distinct from a conflict and requires an admin session',async()=>{
+ const admin='__Host-cvm-session='+'8'.repeat(64);
+ const buyer='__Host-cvm-session='+'4'.repeat(64);
+ const adminHash=await hash('8'.repeat(64));
+ const payload={sku:'SKU_1',version:4,fields:{description:'Unsaved edit'},stock:10};
+ let unavailable=()=>new Response('Service Unavailable',{status:503});
+ let writes=0;
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:JSON.parse(options.body).p_hash===adminHash,recoveryOnly:false});
+  if(url.includes('admin_write_product')){writes++;return unavailable();}
+  throw Error('Unexpected database request');
+ },async()=>{
+  assert.equal((await run('/api/admin/products',payload)).status,401);
+  assert.equal((await run('/api/admin/products',payload,{cookie:buyer})).status,403);
+  assert.equal(writes,0);
+  for(const failure of [
+   ()=>new Response('Service Unavailable',{status:503}),
+   ()=>Response.json({code:'40001',message:'could not serialize access due to concurrent update'},{status:500}),
+   ()=>{throw Error('Offline');}
+  ]){
+   unavailable=failure;
+   const response=await run('/api/admin/products',payload,{cookie:admin});
+   assert.equal(response.status,503);
+   const body=await response.json();
+   assert.equal(body.error.code,'AUTH_UNAVAILABLE');
+   assert.match(body.error.message,/temporarily unavailable/i);
+   assert.equal(body.product,undefined);
+  }
+ });
+});
+
+test('an editor can reload one product with its latest private version and stock',async()=>{
+ const cookie='__Host-cvm-session='+'8'.repeat(64);
+ const product={sku:'SKU_1',version:5,price_cents:599,description:'Latest edit',status:'Draft',stock:14};
+ await mocked(async url=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:true,recoveryOnly:false});
+  const target=new URL(url);
+  if(target.pathname==='/rest/v1/products'&&target.searchParams.get('id')==='eq.SKU_1')return Response.json([product]);
+  throw Error('Unexpected database request');
+ },async()=>{
+  const path='/api/admin/products?sku=SKU_1';
+  assert.equal((await run(path)).status,401);
+  const response=await run(path,undefined,{cookie});
+  assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).products,[product]);
+  assert.equal((await run(path+'&sku=OTHER',undefined,{cookie})).status,400);
+  assert.equal((await run('/api/admin/products?sku=SKU*',undefined,{cookie})).status,400);
+  assert.equal((await run(path,{sku:'SKU_1',version:5,fields:{}},{cookie})).status,400);
  });
 });
 

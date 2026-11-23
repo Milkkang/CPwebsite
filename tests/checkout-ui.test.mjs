@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {state} from '../dist/store.js';
 import {card,cart,checkout,confirmation,detail} from '../dist/shop.js';
+const linkedOrderId='44444444-4444-4444-8444-444444444444';
 
 test('guests cannot add products to a browser basket',()=>{
  const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
@@ -43,16 +44,169 @@ test('checkout uses only a saved address and labels Stripe sandbox clearly',()=>
  assert.doesNotMatch(html,/name="address"/);assert.doesNotMatch(html,/card number/i);
 });
 
-test('Stripe return page waits for the signed webhook instead of claiming final payment state',()=>{
- const html=confirmation(new URLSearchParams('session_id=cs_test_123'));
- assert.match(html,/signed webhook is processed/);assert.doesNotMatch(html,/payment successful/i);
+test('Stripe return displays the matched order details link only after confirmation',()=>{
+ const pending=confirmation({status:'checking',orderNumber:'CVM-1051'});
+ assert.match(pending,/Checking test payment/);
+ assert.doesNotMatch(pending,/View order details|payment confirmed/i);
+ const paid=confirmation({status:'paid',orderId:linkedOrderId,orderNumber:'CVM-1051'});
+ assert.match(paid,/Test payment confirmed/);
+ assert.match(paid,/>CVM-1051</);
+ assert.ok(paid.includes('href="#/orders?id='+linkedOrderId+'">View order details'));
 });
 
-test('Stripe return refreshes the member cart until the signed webhook is visible',async()=>{
- const source=await readFile(new URL('../dist/app.js',import.meta.url),'utf8');
- assert.match(source,/async function refreshCheckoutReturn\(sessionId\)/);
- assert.match(source,/Promise\.all\(\[loadMemberShopping\(\),loadOrders\(\)\]\)/);
- assert.match(source,/case 'confirmation':[\s\S]*refreshCheckoutReturn\(params\.get\('session_id'\)\)/);
+async function openCheckoutReturn(t,hash,fetchHandler){
+ t.mock.timers.enable({apis:['setTimeout']});
+ const app={html:'',renders:0,get innerHTML(){return this.html;},set innerHTML(html){this.html=html;this.renders++;},querySelector:()=>null};
+ const documentEvents=new Map(),windowEvents=new Map();
+ const location=new URL('https://cpvaluemart.com/'+hash);
+ const globals={location,history:{replaceState(_state,_title,hash){location.hash=hash;}},
+  document:{getElementById:()=>app,addEventListener:(event,fn)=>documentEvents.set(event,fn),body:{classList:{toggle(){}}}},
+  window:{addEventListener:(event,fn)=>windowEvents.set(event,fn),scrollTo(){}},
+  FormData:class extends URLSearchParams {constructor(form){super(form.values);}},BroadcastChannel:undefined};
+ for(const [key,value] of Object.entries(globals)){
+  const previous=Object.getOwnPropertyDescriptor(globalThis,key);
+  Object.defineProperty(globalThis,key,{value,writable:true,configurable:true});
+  t.after(()=>previous?Object.defineProperty(globalThis,key,previous):delete globalThis[key]);
+ }
+ const paths=[];
+ const account={id:'buyer',email:'buyer@example.invalid',name:'Buyer'};
+ t.mock.method(globalThis,'fetch',async(path,options)=>{
+  paths.push([path,options.method]);
+  const response=fetchHandler?.(path,options);
+  if(response)return response;
+  switch(path){
+   case '/api/auth/session': return Response.json({account});
+   case '/api/orders': return Response.json({orders:[{id:'older',number:'CVM-1050',createdAt:'2026-11-20T12:00:00Z',paymentStatus:'paid',fulfilmentStatus:'Processing',items:[]}]});
+   case '/api/shopping': return Response.json({cart:[],saved:[],recent:[]});
+   case '/api/traffic': return Response.json({ok:true});
+   case '/api/addresses': return Response.json({addresses:[]});
+   default: throw Error('Unexpected request '+path);
+  }
+ });
+ const settle=()=>new Promise(resolve=>setImmediate(resolve));
+ const {auth}=await import('../dist/auth.js');
+ Object.assign(auth,{account:null,isAdmin:false,recoveryOnly:false,loading:true,error:''});
+ await import('../dist/app.js?'+encodeURIComponent(t.name));
+ await settle();
+ return {app,paths,location,settle,documentEvents,windowEvents};
+}
+
+test('Stripe return waits for this session even when the basket is empty and an older order is paid',async t=>{
+ const query='session_id=cs_test_current',statusPath='/api/checkout/status?'+query;
+ let paymentStatus='pending';
+ const {app,paths,location,settle,windowEvents}=await openCheckoutReturn(t,'#/confirmation?'+query,path=>{
+  if(path===statusPath)return Response.json({orderId:linkedOrderId,orderNumber:'CVM-1051',paymentStatus});
+  if(path==='/api/orders?id='+linkedOrderId)return Response.json({orders:[{id:linkedOrderId,number:'CVM-1051',
+   createdAt:'2026-11-20T12:00:00Z',paymentStatus:'paid',fulfilmentStatus:'Processing',total:1340,items:[]}]});
+ });
+ assert.match(app.innerHTML,/Checking test payment/);
+ assert.match(app.innerHTML,/>CVM-1051</);
+ assert.doesNotMatch(app.innerHTML,/CVM-1050|View order details/);
+ paymentStatus='paid';
+ t.mock.timers.tick(1000);
+ await settle();
+ assert.match(app.innerHTML,/Test payment confirmed/);
+ const details=app.innerHTML.match(/href="(#[^"]+)">View order details/)?.[1];
+ assert.equal(details,'#/orders?id='+linkedOrderId);
+ assert.deepEqual(paths.filter(([path])=>path.startsWith('/api/checkout')),Array(2).fill([statusPath,'GET']));
+ location.hash=details;
+ windowEvents.get('hashchange')();
+ await settle();
+ assert.match(app.innerHTML,/<h2>CVM-1051<\/h2>/);
+ assert.doesNotMatch(app.innerHTML,/CVM-1050|Order not found/);
+ location.hash='#/orders';
+ windowEvents.get('hashchange')();
+ assert.match(app.innerHTML,/CVM-1050/);
+ assert.doesNotMatch(app.innerHTML,/CVM-1051/);
+});
+
+test('a Stripe detail link shows the exact paid order when purchase history refresh fails',async t=>{
+ const session='session_id=cs_test_staleHistory';
+ const row={id:linkedOrderId,number:'CVM-1051',createdAt:'2026-11-20T12:00:00Z',
+  paymentStatus:'pending',fulfilmentStatus:'Shipped',total:1340,items:[]};
+ let histories=0;
+ const {app,location,settle,windowEvents}=await openCheckoutReturn(t,'#/confirmation?'+session,path=>{
+  if(path==='/api/checkout/status?'+session)return Response.json({orderId:row.id,orderNumber:row.number,paymentStatus:'paid'});
+  if(path==='/api/orders')return ++histories===1?Response.json({orders:[row]}):Response.json({error:{message:'History unavailable.'}},{status:503});
+  if(path==='/api/orders?id='+row.id||path==='/api/orders?id='+row.number)return Response.json({orders:[{...row,paymentStatus:'paid'}]});
+ });
+ assert.match(app.innerHTML,/Test payment confirmed/);
+ location.hash=app.innerHTML.match(/href="(#[^"]+)">View order details/)?.[1];
+ windowEvents.get('hashchange')();
+ await settle();
+ assert.match(app.innerHTML,/Payment status: paid/);
+ assert.equal(location.hash,'#/orders?id='+row.id);
+});
+
+test('incorrect credentials keep the sign-in form and show its error',async t=>{
+ const message='Email or password is incorrect, or the email is not verified.';
+ const {app,documentEvents}=await openCheckoutReturn(t,'#/account',path=>{
+  if(path==='/api/auth/session')return Response.json({account:null,isAdmin:false});
+  if(path==='/api/auth/login')return Response.json({error:{code:'SIGN_IN_FAILED',message}},{status:401});
+ });
+ assert.match(app.innerHTML,/id="auth-login"/);
+ const revision=app.renders,email='login@example.invalid';
+ const status={hidden:true,get isConnected(){return app.renders===revision;}};
+ const button={disabled:false,get isConnected(){return app.renders===revision;}};
+ const form={id:'auth-login',values:{email,password:'incorrect-fixture'},querySelector:()=>status};
+ await documentEvents.get('submit')({target:form,submitter:button,preventDefault(){}});
+ assert.equal(app.renders,revision);
+ assert.equal(form.values.email,email);
+ assert.equal(status.textContent,message);
+ assert.equal(button.disabled,false);
+});
+
+test('Stripe return can retry a request failure or a timed out check for the same session',async t=>{
+ const query='session_id=cs_test_retry',statusPath='/api/checkout/status?'+query;
+ let scenario='unavailable';
+ const {app,paths,location,settle,documentEvents}=await openCheckoutReturn(t,'#/confirmation?'+query,(path,options)=>{
+  if(path!==statusPath)return;
+  if(scenario==='unavailable')return Response.json({error:{code:'AUTH_UNAVAILABLE'}},{status:503});
+  if(scenario==='hanging')return new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));
+  return Response.json({orderNumber:'CVM-1052',paymentStatus:'expired'});
+ });
+ const retry=()=>documentEvents.get('click')({target:{closest:()=>({dataset:{retryCheckoutStatus:''}})}});
+ assert.match(app.innerHTML,/Payment status temporarily unavailable/);
+ assert.match(app.innerHTML,/data-retry-checkout-status/);
+ assert.match(app.innerHTML,/href="#\/orders">View Purchase History/);
+ scenario='hanging';
+ await retry();
+ assert.match(app.innerHTML,/Checking test payment/);
+ t.mock.timers.tick(16000);
+ await settle();
+ assert.match(app.innerHTML,/Still waiting for payment confirmation/);
+ assert.match(app.innerHTML,/data-retry-checkout-status/);
+ scenario='expired';
+ await retry();
+ await settle();
+ assert.match(app.innerHTML,/Test checkout expired/);
+ assert.match(app.innerHTML,/>CVM-1052</);
+ assert.match(app.innerHTML,/href="#\/checkout">Return to checkout/);
+ assert.match(app.innerHTML,/href="#\/shop">Continue shopping/);
+ assert.equal(location.hash,'#/confirmation?'+query);
+ assert.deepEqual(paths.filter(([path])=>path.startsWith('/api/checkout')),Array(3).fill([statusPath,'GET']));
+});
+
+test('a buyer who signs in again reopens the same Stripe checkout return',async t=>{
+ const query='session_id=cs_test_relogin',statusPath='/api/checkout/status?'+query;
+ let signedIn=false;
+ const {app,paths,location,settle,documentEvents,windowEvents}=await openCheckoutReturn(t,'#/confirmation?'+query,path=>{
+  if(path==='/api/auth/session'&&!signedIn)return Response.json({account:null});
+  if(path==='/api/auth/login'){signedIn=true;return Response.json({ok:true});}
+  if(path===statusPath)return Response.json({orderNumber:'CVM-1053',paymentStatus:'paid'});
+ });
+ const next=app.innerHTML.match(/id="auth-login" data-next="([^"]+)"/)?.[1];
+ assert.equal(next,'/confirmation?'+query);
+ assert.equal(paths.some(([path])=>path===statusPath),false);
+ const button={disabled:false};
+ await documentEvents.get('submit')({preventDefault(){},submitter:button,target:{id:'auth-login',querySelector:()=>null,
+  dataset:{next},values:{email:'buyer@example.invalid',password:'fixture-password'}}});
+ assert.equal(location.hash,'#/confirmation?'+query);
+ windowEvents.get('hashchange')();
+ await settle();
+ assert.match(app.innerHTML,/Test payment confirmed/);
+ assert.match(app.innerHTML,/>CVM-1053</);
+ assert.deepEqual(paths.filter(([path])=>path.startsWith('/api/checkout')),[[statusPath,'GET']]);
 });
 
 test('admin order loading includes email audit status and a controlled resend action',async()=>{
