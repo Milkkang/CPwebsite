@@ -10,6 +10,7 @@ const imageDialog=document.getElementById('image-dialog');
 let lastPath='', lastProductView='', toastTimer, receiptTimer;
 let renderedAdminGate=null;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
+let storefrontDeliveryLoaded=false;
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersOwner='';
@@ -182,7 +183,9 @@ function ensureStorefront(path,params) {
     categories.splice(0,categories.length,...categoryRows.map(row=>[row.id,row.name,row.icon,row.color]));
     if(publicConfig.homepage)state.settings.homepage=publicConfig.homepage;
     const delivery=publicConfig.delivery?.find(row=>row.country_code==='SG');
+    storefrontDeliveryLoaded=Boolean(delivery);
     if(delivery){state.settings.shipping=delivery.shipping_cents;state.settings.threshold=delivery.free_threshold_cents;}
+    else if(['cart','checkout','delivery'].includes(section))throw Error('Delivery rates are currently unavailable. Please retry.');
     let data;
     if(section==='product') {
       const result=await catalogRequest('/api/products/'+encodeURIComponent(id));
@@ -191,10 +194,11 @@ function ensureStorefront(path,params) {
       const related=await catalogRequest(catalogQuery(new URLSearchParams('size=30'),data.product.category));
       data.related=related.products.map(listingFromApi).filter(row=>row.id!==data.product.id).slice(0,4);
       rememberListings(data.related);
-    } else if(section==='categories') data={};
-    else if(section==='cart'||section==='offers'){
+    } else if(section==='categories'||section==='delivery') data={};
+    else if(['cart','checkout','offers'].includes(section)){
       const offers=await catalogRequest('/api/offers');
       state.coupons=offers.offers.map(row=>({code:row.code,type:row.kind,amount:row.amount,min:row.minimum_cents,active:true}));
+      if(state.coupon&&!state.coupons.some(coupon=>coupon.code===state.coupon)){state.coupon='';save();}
       data={};
     }
     else if(section==='' ) {
@@ -303,7 +307,7 @@ function render({scroll=false}={}) {
   const showAdminGate=admin&&(!auth.isAdmin||auth.recoveryOnly||adminRecovery);
   if(admin&&!adminRecovery&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
   const productView=key==='product'?path+'?'+(params.get('sku')??''):'';
-  const publicCatalog=['','shop','search','categories','category','product','cart','offers'].includes(key);
+  const publicCatalog=['','shop','search','categories','category','product','cart','checkout','delivery','offers'].includes(key);
   if(publicCatalog&&path!==lastPath&&storefront.key===storefrontKey(path,params))storefront={key:'',data:null,error:null};
   if(publicCatalog)ensureStorefront(path,params);
   const remote=publicCatalog&&storefront.key===storefrontKey(path,params)?storefront:null;
@@ -312,7 +316,7 @@ function render({scroll=false}={}) {
   let body='';
   if(publicCatalog&&!remote) body='<section class="empty" role="status"><h2>Loading catalog…</h2></section>';
   else if(publicCatalog&&remote.error) body=storefrontFailure(remote.error);
-  else if((auth.loading&&privateBuyerRoutes.has(path))||(shoppingLoading&&['cart','saved','recently-viewed'].includes(key)))body='<section class="panel narrow"><h1>My account</h1><p role="status">Loading your shopping list…</p></section>';
+  else if((auth.loading&&privateBuyerRoutes.has(path))||(shoppingLoading&&['cart','checkout','saved','recently-viewed'].includes(key)))body='<section class="panel narrow"><h1>My account</h1><p role="status">Loading your shopping list…</p></section>';
   else if(showAdminGate) body=adminGate(params);
   else if(admin) body=
     !adminProductsLoaded?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':
@@ -353,7 +357,7 @@ function render({scroll=false}={}) {
   const gate=showAdminGate?{route:location.hash, account:auth.account?.id, body}:null;
   // Keep the form mounted when a background refresh leaves the route and session unchanged.
   if(!gate||gate.route!==renderedAdminGate?.route||gate.account!==renderedAdminGate.account||gate.body!==renderedAdminGate.body)
-    app.innerHTML=admin?body:shopFrame(body,params.get('q')??'',{showAdminLink:key!=='account'});
+    app.innerHTML=admin?body:shopFrame(body,params.get('q')??'',{showAdminLink:key!=='account',showDeliveryThreshold:storefrontDeliveryLoaded});
   renderedAdminGate=gate;
   if(!admin)trackTraffic('visit');
   const heading=app.querySelector('h1');

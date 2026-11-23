@@ -35,7 +35,7 @@ createServer(async(req,res)=>{
   if(url.pathname==='/api/categories')return json({categories:[category]});
   const config={homepage:{content:{title:'QA essentials',primaryLabel:'Shop products',primaryPath:'/shop',categoryTitle:'Categories',categoryIds:[category.id]},version:1},delivery:{shipping_cents:390,free_threshold_cents:5000,version:1},coupons:[]};
   if(url.pathname==='/api/admin/config')return json(config);
-  if(url.pathname==='/api/config')return json({...config,homepage:config.homepage.content,delivery:[config.delivery]});
+  if(url.pathname==='/api/config')return json({...config,homepage:config.homepage.content,delivery:[{...config.delivery,country_code:'SG'}]});
   if(url.pathname==='/api/shopping')return json({cart:[],saved:[],recent:[]});
   if(url.pathname==='/api/addresses')return json({addresses:[]});
   if(url.pathname==='/api/brands')return json({brands:['QA Brand']});

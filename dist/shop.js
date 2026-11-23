@@ -49,9 +49,9 @@ export function orderItemLabel(item,showRating=false) {
 }
 export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="item-previews">'+items.map(item=>'<li>'+orderItemLabel(item,showRating)+'</li>').join('')+'</ul>';
 const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
-export function shopFrame(body, query='', {showAdminLink=true}={}) {
+export function shopFrame(body, query='', {showAdminLink=true,showDeliveryThreshold=false}={}) {
   const items=Object.values(state.cart).reduce((a,b)=>a+b,0);
-  return '<div class="topline"><span>CP VALUE MART</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
+  return '<div class="topline"><span>CP VALUE MART</span><span>Singapore delivery'+(showDeliveryThreshold?' · Free from '+cash(state.settings.threshold):'')+'</span></div>'+
     '<header class="shop-head"><div class="wrap head-inner">'+logo()+
     '<form class="search" id="search-form">'+icon('search')+'<input name="q" aria-label="Search products" type="search" placeholder="Search products, brands or SKU" value="'+e(query)+'" maxlength="100"><button>Search</button></form>'+
     '<nav class="top-actions" aria-label="Account and shopping"><a class="header-saved" href="#/saved" title="Saved Items" aria-label="Saved Items">'+icon('heart')+'<span aria-hidden="true">Saved Items</span></a><a href="#/account" title="My account" aria-label="My account">'+icon('user')+'</a><a class="bag-link" href="#/cart" aria-label="Basket, '+items+' items">'+icon('bag')+'<span>Basket</span><b>'+items+'</b></a></nav></div>'+
