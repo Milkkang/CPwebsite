@@ -50,7 +50,7 @@ export async function bodyJSON(request,maxBytes=8192) {
 }
 
 function field(data,key,min,max) {const value=data[key];if(typeof value!=='string'||value.length<min||value.length>max||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value))bad();return value;}
-function email(data) {const value=field(data,'email',3,254).trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))bad('Enter a valid email address.');return value;}
+function email(data,key='email') {const value=field(data,key,3,254).trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))bad('Enter a valid email address.');return value;}
 function password(data){return field(data,'password',12,128);}
 async function limit(request,env,scope,identity='') {
  const key=await hash(env.SUPABASE_SECRET_KEY+'|'+scope+'|'+(request.headers.get('CF-Connecting-IP')??'unknown')+'|'+identity);
@@ -191,8 +191,23 @@ export async function handleAuth(request,env) {
   }
   throw new ApiError(404,'NOT_FOUND','API endpoint not found.');
  }
- if(path==='/api/profile') {if(read){const r=await db(env,'buyer_profiles?'+new URLSearchParams({select:'display_name,version',user_id:'eq.'+who.account.id}));return result({profile:r.data[0]??{display_name:'',version:0},account:who.account});}
-  const data=await bodyJSON(request);if('user_id'in data)bad();const name=field(data,'name',1,80).trim();if(!name)bad();const rows=await db(env,'buyer_profiles?'+new URLSearchParams({user_id:'eq.'+who.account.id}),{method:'PATCH',body:{display_name:name}});if(!rows.data.length)await db(env,'buyer_profiles',{method:'POST',body:{user_id:who.account.id,display_name:name}});return result({ok:true});}
+ if(path==='/api/profile'){
+  if(read){
+   const rows=await db(env,'buyer_profiles?'+new URLSearchParams({select:'display_name,checkout_email,version',user_id:'eq.'+who.account.id}));
+   return result({profile:rows.data[0]??{display_name:'',checkout_email:null,version:0},account:who.account});
+  }
+  const data=await bodyJSON(request);
+  if('user_id'in data)bad();
+  const name=field(data,'name',1,80).trim();
+  if(!name)bad();
+  const profile={user_id:who.account.id,display_name:name};
+  if('checkoutEmail'in data){
+   const value=field(data,'checkoutEmail',0,254).trim();
+   profile.checkout_email=value?email({checkoutEmail:value},'checkoutEmail'):null;
+  }
+  await db(env,'buyer_profiles?on_conflict=user_id',{method:'POST',prefer:'resolution=merge-duplicates,return=representation',body:profile});
+  return result({ok:true});
+ }
  if(path==='/api/shopping') {
   if(read){const r=await db(env,'rpc/read_member_shopping',{method:'POST',body:{p_user:who.account.id}});return result(r.data);}
   const data=await bodyJSON(request), action=field(data,'action',1,20);
@@ -227,7 +242,7 @@ export async function handleAuth(request,env) {
  }
  if(/^\/api\/addresses\/[a-f0-9-]{36}$/.test(path)&&!read){const data=await bodyJSON(request);if(!['delete','default'].includes(data.action)||'user_id'in data)bad();const id=path.split('/').at(-1);const r=await db(env,'rpc/change_member_address',{method:'POST',body:{p_user_id:who.account.id,p_action:data.action,p_address_id:id}});if(!r.data)throw new ApiError(404,'NOT_FOUND','Address not found.');return result({ok:true});}
  if(path==='/api/addresses'){if(read){const r=await db(env,'rpc/read_member_addresses',{method:'POST',body:{p_user_id:who.account.id}});return result({addresses:r.data});}
-  const data=await bodyJSON(request);if('user_id'in data||'country_code'in data)bad();const full_name=field(data,'name',1,80).trim(),address_line=field(data,'address',1,200).trim(),postal_code=field(data,'postal',6,6);if(!/^[0-9]{6}$/.test(postal_code))bad('Enter a six-digit Singapore postal code.');
+  const data=await bodyJSON(request);if('user_id'in data||'country_code'in data)bad();const full_name=field(data,'name',1,80).trim(),address_line=field(data,'address',1,200).replace(/\r\n?/g,'\n').trim(),postal_code=field(data,'postal',6,6);if(!/^[0-9]{6}$/.test(postal_code))bad('Enter a six-digit Singapore postal code.');
   const r=await db(env,'rpc/change_member_address',{method:'POST',body:{p_user_id:who.account.id,p_action:'create',p_fields:{full_name,address_line,postal_code}}});return result({address:r.data},undefined,201);}
  throw new ApiError(404,'NOT_FOUND','API endpoint not found.');
 }

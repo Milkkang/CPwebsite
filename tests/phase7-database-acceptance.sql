@@ -108,6 +108,13 @@ begin
  perform set_config('request.jwt.claims','{"role":"service_role"}',true);
  result:=public.resolve_web_session(repeat('b',64));
  if (result->>'isAdmin')::boolean then raise exception 'unapproved extra admin session';end if;
+ insert into public.buyer_profiles(user_id,checkout_email) values(u,'pay@example.invalid')
+  on conflict(user_id) do update set checkout_email=excluded.checkout_email;
+ result:=public.resolve_web_session(repeat('b',64));
+ if result#>>'{account,checkoutEmail}' is distinct from 'pay@example.invalid'
+   or result#>>'{account,email}' is distinct from 'phase7@example.invalid' then
+  raise exception 'checkout email changed the sign-in identity or was not returned';
+ end if;
  insert into public.checkout_testers(user_id) values(u);
  result:=public.resolve_web_session(repeat('b',64));
  if not (result->>'isAdmin')::boolean then raise exception 'explicit QA admin not recognized';end if;
@@ -127,6 +134,9 @@ declare
  shipments jsonb:=jsonb_build_array(
    jsonb_build_object('id',first_order,'version',1,'tracking','TRACK-ONE'),
    jsonb_build_object('id',second_order,'version',1,'tracking','TRACK-TWO'));
+ deliveries jsonb:=jsonb_build_array(
+   jsonb_build_object('id',first_order,'version',2),
+   jsonb_build_object('id',second_order,'version',2));
 begin
  insert into auth.users(id,email,email_confirmed_at) values
   (buyer,'bulk-buyer@example.invalid',now()),(admin,'bulk-admin@example.invalid',now());
@@ -172,6 +182,42 @@ begin
       and ((id=first_order and tracking_number='TRACK-ONE') or (id=second_order and tracking_number='TRACK-TWO')))<>2
     or (select count(*) from public.email_jobs where order_id in (first_order,second_order) and kind='shipment')<>2 then
   raise exception 'bulk shipping did not preserve per-order tracking and shipment email';
+ end if;
+ if has_function_privilege('anon','public.admin_bulk_deliver_orders(uuid,jsonb)','EXECUTE') or
+    has_function_privilege('authenticated','public.admin_bulk_deliver_orders(uuid,jsonb)','EXECUTE') then
+  raise exception 'bulk delivery is callable by an application role';
+ end if;
+ set local role service_role;
+ begin
+  perform public.admin_bulk_deliver_orders(buyer,deliveries);
+  raise exception 'bulk delivery accepted a non-admin actor';
+ exception when insufficient_privilege then null;
+ end;
+ begin
+  perform public.admin_bulk_deliver_orders(admin,jsonb_set(deliveries,'{1,version}','1'));
+  raise exception 'bulk delivery accepted a stale order version';
+ exception when serialization_failure then null;
+ end;
+ reset role;
+ if exists(select 1 from public.orders where id in (first_order,second_order) and fulfilment_status<>'Shipped')
+    or exists(select 1 from public.email_jobs where order_id in (first_order,second_order) and kind='delivery') then
+  raise exception 'a stale batch partially marked orders delivered or queued email';
+ end if;
+
+ set local role service_role;
+ if public.admin_bulk_deliver_orders(admin,deliveries)<>2 then
+  raise exception 'bulk delivery returned an unexpected count';
+ end if;
+ begin
+  perform public.admin_bulk_deliver_orders(admin,deliveries);
+  raise exception 'bulk delivery accepted a duplicate request';
+ exception when serialization_failure then null;
+ end;
+ reset role;
+ if (select count(*) from public.orders where fulfilment_status='Delivered' and version=3
+      and ((id=first_order and tracking_number='TRACK-ONE') or (id=second_order and tracking_number='TRACK-TWO')))<>2
+    or (select count(*) from public.email_jobs where order_id in (first_order,second_order) and kind='delivery')<>2 then
+  raise exception 'bulk delivery did not preserve tracking and queue exactly one email per order';
  end if;
 end $$;
 rollback;

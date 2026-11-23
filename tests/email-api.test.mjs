@@ -21,7 +21,7 @@ test('email worker sends only an allowlisted test recipient with a stable idempo
   throw Error('Unexpected request '+url);
  },async()=>assert.deepEqual(await processEmailJobs(env),{processed:1,configured:true}));
  assert.equal(sent.headers['Idempotency-Key'],job.idempotency_key);assert.deepEqual(sent.body.to,[job.recipient]);
- assert.match(sent.body.subject,/\[TEST ORDER\]/);assert.equal(finished.p_success,true);assert.equal(finished.p_provider_id,'email_test_1');
+ assert.equal(sent.body.subject,'CP Value Mart · Order confirmed · CVM-1004');assert.match(sent.body.html,/S\$13\.40/);assert.equal(finished.p_success,true);assert.equal(finished.p_provider_id,'email_test_1');
 });
 
 test('email worker fails closed before Resend when the test recipient is not allowlisted',async()=>{
@@ -36,20 +36,27 @@ test('email worker fails closed before Resend when the test recipient is not all
  assert.equal(finished.p_success,false);assert.equal(finished.p_retryable,false);assert.equal(finished.p_error,'RECIPIENT_NOT_ALLOWED');
 });
 
-test('delivery notice remains a single allowlisted test email',async()=>{
+test('shipment and delivery emails use customer-facing subjects and retain an accurate payment notice',async()=>{
  const job={id:'11111111-1111-4111-8111-111111111112',kind:'delivery',recipient:'acceptance@example.invalid',
   payload:{orderNumber:'CVM-1004'},is_test:true,idempotency_key:'delivery/order/version',attempt_count:1};
- let sent;
+ const sent=[];
+ const shipment={...job,kind:'shipment',id:'11111111-1111-4111-8111-111111111113',idempotency_key:'shipment/order/version',payload:{...job.payload,tracking:'TRACK-1'}};
  await mocked(async(url,options)=>{
   if(String(url).includes('reconcile_email_confirmations'))return Response.json(0);
-  if(String(url).includes('claim_email_jobs'))return Response.json([job]);
-  if(String(url)==='https://api.resend.com/emails'){sent=JSON.parse(options.body);return Response.json({id:'email_delivery_test'});}
+  if(String(url).includes('claim_email_jobs'))return Response.json([shipment,job]);
+  if(String(url)==='https://api.resend.com/emails'){sent.push(JSON.parse(options.body));return Response.json({id:'email_notice_'+sent.length});}
   if(String(url).includes('finish_email_attempt'))return Response.json(true);
   throw Error('Unexpected request '+url);
- },async()=>assert.deepEqual(await processEmailJobs(env),{processed:1,configured:true}));
- assert.deepEqual(sent.to,['acceptance@example.invalid']);
- assert.match(sent.subject,/^\[TEST ORDER\] Test order delivered/);
- assert.match(sent.text,/marked as delivered/);
+ },async()=>assert.deepEqual(await processEmailJobs(env),{processed:2,configured:true}));
+ for(const message of sent){
+  assert.deepEqual(message.to,['acceptance@example.invalid']);
+  assert.match(message.text,/No funds were transferred/);
+  assert.doesNotMatch(message.subject+message.text+message.html,/\b(test|sandbox|demo)\b/i);
+ }
+ assert.equal(sent[0].subject,'CP Value Mart · Order shipped · CVM-1004');
+ assert.match(sent[0].text,/Tracking number: TRACK-1/);
+ assert.equal(sent[1].subject,'CP Value Mart · Order delivered · CVM-1004');
+ assert.match(sent[1].text,/marked as delivered/);
 });
 
 test('outbox reconciliation failure does not stop existing due email jobs',async()=>{
@@ -79,8 +86,8 @@ test('cancellation and sandbox refund templates stay labelled and allowlisted',a
   throw Error('Unexpected request '+url);
  },async()=>assert.deepEqual(await processEmailJobs(env),{processed:2,configured:true}));
  assert.equal(sent.length,2);
- for(const message of sent){assert.deepEqual(message.to,['acceptance@example.invalid']);assert.match(message.subject,/^\[TEST ORDER\]/);assert.match(message.text,/No real payment or revenue/);}
- assert.match(sent[0].subject,/cancelled/);assert.match(sent[1].subject,/refund/);
+ for(const message of sent){assert.deepEqual(message.to,['acceptance@example.invalid']);assert.match(message.subject,/^CP Value Mart · /);assert.match(message.text,/No funds were transferred/);assert.doesNotMatch(message.subject+message.text+message.html,/\b(test|sandbox|demo)\b/i);}
+ assert.match(sent[0].subject,/cancelled/);assert.match(sent[1].subject,/Refund recorded/);
 });
 
 async function signedWebhook(event,id='msg_test_1'){

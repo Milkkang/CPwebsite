@@ -10,9 +10,9 @@ const call=(path,data,{origin='https://cpvaluemart.com'}={})=>worker.fetch(new R
 async function mocked(handler,fn){const original=globalThis.fetch;globalThis.fetch=handler;try{await fn();}finally{globalThis.fetch=original;}}
 
 test('checkout derives the order total on the server and creates only a Stripe test session',async()=>{
- let stripeForm,attached;
+ let stripeForm,attached,member={...account,checkoutEmail:'pay@example.invalid'};
  await mocked(async(url,options)=>{
-  if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin:false,recoveryOnly:false});
+  if(String(url).includes('resolve_web_session'))return Response.json({account:member,isAdmin:false,recoveryOnly:false});
   if(String(url).includes('create_test_order'))return Response.json({id:orderId,number:'CVM-1000',payment_status:'pending',fulfilment_status:'Processing',tracking_number:'',subtotal_cents:1000,shipping_cents:390,discount_cents:50,total_cents:1340,created_at:new Date().toISOString(),items:[]});
   if(String(url)==='https://api.stripe.com/v1/checkout/sessions'){
    assert.equal(options.headers.Authorization,'Bearer sk_test_fake');stripeForm=new URLSearchParams(options.body);
@@ -21,11 +21,39 @@ test('checkout derives the order total on the server and creates only a Stripe t
   if(String(url).includes('attach_test_checkout')){attached=JSON.parse(options.body);return Response.json(true);}
   throw Error('Unexpected request '+url);
  },async()=>{
-  const response=await call('/api/checkout/session',{addressId,coupon:'WELCOME5',total:1});
+  const response=await call('/api/checkout/session',{addressId,coupon:'WELCOME5',total:1,checkoutEmail:'ignored@example.invalid'});
   assert.equal(response.status,201);const body=await response.json();assert.equal(body.testMode,true);
   assert.equal(stripeForm.get('line_items[0][price_data][unit_amount]'),'1340');
+  assert.equal(stripeForm.get('customer_email'),'pay@example.invalid');
   assert.equal(stripeForm.get('metadata[order_id]'),orderId);assert.equal(stripeForm.has('total'),false);
   assert.deepEqual(attached,{p_user:userId,p_order:orderId,p_session:'cs_test_123'});
+  member=account;
+  assert.equal((await call('/api/checkout/session',{addressId})).status,201);
+  assert.equal(stripeForm.get('customer_email'),account.email);
+ });
+});
+
+test('checkout availability and session creation use the same account restrictions',async()=>{
+ const path='/api/checkout/session';
+ let approved=false;
+ let member={...account,email:'shopper@example.invalid'};
+ await mocked(async(url,options)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account:member,isAdmin:false});
+  assert.match(String(url),/is_checkout_tester$/);
+  assert.deepEqual(JSON.parse(options.body),{p_user:userId});
+  return Response.json(approved);
+ },async()=>{
+  assert.equal((await (await call(path)).json()).available,false);
+  const denied=await call(path,{addressId});
+  assert.equal(denied.status,403);
+  assert.equal((await denied.json()).error.message,'Online ordering is currently unavailable.');
+  approved=true;
+  assert.equal((await (await call(path)).json()).available,true);
+  member={...account,verified:false};
+  assert.equal((await (await call(path)).json()).available,false);
+  assert.equal((await call(path,{addressId})).status,403);
+  member=account;
+  assert.equal((await (await call(path)).json()).available,true);
  });
 });
 
@@ -84,6 +112,31 @@ test('bulk shipping checks admin access and submits distinct orders in a single 
   const stale=await call(path,{orders});
   assert.equal(stale.status,409);
   assert.equal((await stale.json()).error.code,'VERSION_CONFLICT');
+  assert.equal(calls,2);
+ });
+});
+
+test('bulk delivery requires an admin and accepts versioned orders without tracking overrides',async()=>{
+ const path='/api/admin/orders/bulk-deliver', orders=[{orderId,version:2,tracking:'ignored'}];
+ let isAdmin=false,stale=false,calls=0;
+ await mocked(async(url,options)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin});
+  assert.match(String(url),/admin_bulk_deliver_orders$/);
+  assert.deepEqual(JSON.parse(options.body),{p_actor:userId,p_orders:[{id:orderId,version:2}]});
+  calls++;
+  return stale?Response.json({code:'40001'},{status:400}):Response.json(1);
+ },async()=>{
+  assert.equal((await call(path,{orders})).status,403);
+  isAdmin=true;
+  assert.equal((await call(path,{orders},{origin:'https://example.invalid'})).status,403);
+  assert.equal((await call(path,{orders:[...orders,...orders]})).status,400);
+  const delivered=await call(path,{orders});
+  assert.equal(delivered.status,200);
+  assert.equal((await delivered.json()).delivered,1);
+  stale=true;
+  const conflict=await call(path,{orders});
+  assert.equal(conflict.status,409);
+  assert.equal((await conflict.json()).error.code,'VERSION_CONFLICT');
   assert.equal(calls,2);
  });
 });

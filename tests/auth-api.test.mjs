@@ -20,6 +20,30 @@ test('unauthenticated admin/profile writes and cross-site requests are rejected 
  });
 });
 
+test('checkout email is validated and saved only to the signed-in account profile',async()=>{
+ const cookie='__Host-cvm-session='+'a'.repeat(64);
+ const writes=[];
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin:false});
+  assert.match(url,/buyer_profiles\?on_conflict=user_id$/);
+  assert.equal(options.headers.Prefer,'resolution=merge-duplicates,return=representation');
+  writes.push(JSON.parse(options.body));
+  return Response.json(writes.slice(-1),{status:201});
+ },async()=>{
+  for(const data of [{name:'Customer',checkoutEmail:'bad'},{name:'Customer',checkoutEmail:'pay@example.invalid',user_id:'other'}]){
+   assert.equal((await run('/api/profile',data,{cookie})).status,400);
+  }
+  for(const data of [{checkoutEmail:'  PAY@example.invalid  '},{},{checkoutEmail:''}]){
+   assert.equal((await run('/api/profile',{name:'Customer',...data},{cookie})).status,200);
+  }
+  assert.deepEqual(writes,[
+   {user_id:userId,display_name:'Customer',checkout_email:'pay@example.invalid'},
+   {user_id:userId,display_name:'Customer'},
+   {user_id:userId,display_name:'Customer',checkout_email:null}
+  ]);
+ });
+});
+
 test('login stores only a hash and encrypted access token; cookie is opaque, HttpOnly and Secure',async()=>{
  let stored;
  await mocked(async(url,options)=>{

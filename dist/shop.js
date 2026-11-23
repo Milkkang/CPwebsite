@@ -51,7 +51,7 @@ export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="it
 const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
 export function shopFrame(body, query='', {showAdminLink=true}={}) {
   const items=Object.values(state.cart).reduce((a,b)=>a+b,0);
-  return '<div class="test-payment-banner" role="status">TEST PAYMENTS ONLY · Browsing is open. Checkout is restricted to approved testers. No real orders or charges.</div><div class="topline"><span>CP VALUE MART</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
+  return '<div class="topline"><span>CP VALUE MART</span><span>Singapore delivery · Free from '+cash(state.settings.threshold)+'</span></div>'+
     '<header class="shop-head"><div class="wrap head-inner">'+logo()+
     '<form class="search" id="search-form">'+icon('search')+'<input name="q" aria-label="Search products" type="search" placeholder="Search products, brands or SKU" value="'+e(query)+'" maxlength="100"><button>Search</button></form>'+
     '<nav class="top-actions" aria-label="Account and shopping"><a class="header-saved" href="#/saved" title="Saved Items" aria-label="Saved Items">'+icon('heart')+'<span aria-hidden="true">Saved Items</span></a><a href="#/account" title="My account" aria-label="My account">'+icon('user')+'</a><a class="bag-link" href="#/cart" aria-label="Basket, '+items+' items">'+icon('bag')+'<span>Basket</span><b>'+items+'</b></a></nav></div>'+
@@ -172,13 +172,29 @@ export function cart(repurchase) {
     '<form id="coupon-form" class="coupon-form"><label>Coupon code <input name="code" value="'+e(state.coupon)+'" placeholder="Enter code" maxlength="24"></label><button class="btn outline">Apply</button></form>'+
     (state.coupon?'<p class="subtle">'+(amounts.valid?e(state.coupon)+' is applied.':'Coupon requirements are currently unmet.')+'</p>':'')+'</section>'+summary(amounts)+'</div>');
 }
-export function checkout(addresses) {
+export function checkout(addresses,availability=false) {
+  if(availability===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Checking availability…</p></section>';
+  if(!availability)return crumb('Checkout')+empty('Online ordering is currently unavailable','You can still browse products and save items to your basket.',go('/shop','Continue shopping','btn primary'));
   if(!state.account)return crumb('Checkout')+accountSignIn('/checkout');
   const rows=cartLines(),amounts=totals();
-  if(!rows.length)return crumb('Checkout')+empty('Your basket is empty','Add a product before starting test checkout.',go('/shop','Continue shopping','btn primary'));
+  if(!rows.length)return crumb('Checkout')+empty('Your basket is empty','Add a product before starting checkout.',go('/shop','Continue shopping','btn primary'));
   if(addresses===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Loading delivery addresses…</p></section>';
-  if(!addresses.length)return crumb('Checkout')+empty('Add a delivery address','Save a Singapore delivery address in your account before test checkout.',go('/account','Open my account','btn primary'));
-  return crumb('Checkout')+'<div class="page-title"><h1>Secure test checkout</h1><p>Stripe sandbox only. No real payment will be taken.</p></div><div class="two-col"><form id="checkout-form" class="panel form-stack"><h2>Delivery address</h2><label>Saved address<select name="addressId" required>'+addresses.map(address=>'<option value="'+e(address.id)+'"'+(address.is_default?' selected':'')+'>'+e(address.full_name)+' · '+e(address.address_line)+' · Singapore '+e(address.postal_code)+'</option>').join('')+'</select></label><p class="notice">Test mode: use Stripe test card details only. Never enter a real card.</p><button class="btn primary">Continue to Stripe test checkout</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
+  if(!addresses.length)return crumb('Checkout')+empty('Add a delivery address','Save a Singapore delivery address in your account before checkout.',go('/account','Open my account','btn primary'));
+  const selected=addresses.find(address=>address.is_default)??addresses[0];
+  const email=state.account.checkoutEmail||state.account.email;
+  const cards=addresses.map(address=>{
+    const lines=String(address.address_line??'').split(/\r?\n|,\s*/).map(line=>line.trim()).filter(Boolean);
+    return '<div class="checkout-address-lines" data-checkout-address="'+e(address.id)+'"'+(address===selected?'':' hidden')+
+      '><strong>'+e(address.full_name)+'</strong><span>'+e(email)+'</span>'+
+      lines.map(line=>'<span>'+e(line)+'</span>').join('')+'<span>Singapore '+e(address.postal_code)+'</span></div>';
+  }).join('');
+  return crumb('Checkout')+'<div class="page-title"><h1>Checkout preview</h1><p>This order is simulated. You will not be charged.</p></div>'+
+    '<div class="two-col"><form id="checkout-form" class="panel form-stack"><h2>Delivery address</h2><label>Saved address<select name="addressId" required>'+
+    addresses.map(address=>'<option value="'+e(address.id)+'"'+(address===selected?' selected':'')+'>'+
+      e(address.full_name)+' · '+e(address.address_line.replace(/\s+/g,' '))+' · Singapore '+e(address.postal_code)+'</option>').join('')+
+    '</select></label><div aria-live="polite">'+cards+'</div>'+
+    '<p class="notice">Use the sample card details provided for this checkout. Do not enter a real card.</p>'+
+    '<button class="btn primary">Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
 }
 function accountSignIn(next='') {
   return '<section class="panel narrow"><h2>Sign in to your account</h2>'+link(href('/account',{next}),'Sign in','btn primary')+'</section>';
@@ -290,7 +306,7 @@ export function orders(params=new URLSearchParams()) {
   const id=(params.get('id')??'').trim().toUpperCase();
   const label=Object.hasOwn(purchaseTabs,view)?purchaseTabs[view]:id?'Order details':'Purchase History';
   const nav=crumb(go('/account','My account'),label)+'<div class="page-title"><h1>'+label+'</h1></div>';
-  if(!state.account) return nav+empty('Sign in to see your orders','Use your demo account to view purchases.',go('/account','Sign in','btn primary'));
+  if(!state.account) return nav+empty('Sign in to see your orders','Sign in to view your order history.',go('/account','Sign in','btn primary'));
   const purchases=buyerOrders();
   const order=id?purchases.find(o=>o.id===id):null;
   const stage=trackingStages.find(item=>item.key===params.get('stage'))??
@@ -320,33 +336,33 @@ export function orderDisplay(o,{buyerTracking=false}={}) {
   const tracking=o.tracking||(buyerTracking&&o.status!=='Processing'?'Not available':'Awaiting shipment');
   return '<div class="panel order-display"><div class="section-title"><div><h2>'+e(o.id)+'</h2><p class="subtle">'+e(o.date)+'</p></div>'+badge(o.status,buyerTracking&&o.status==='Delivered'?'Received':stage?.label)+'</div>'+
     (o.status==='Cancelled'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
-    '<p class="subtle">TEST ORDER · No real payment or revenue. Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
+    '<p class="subtle">Simulated order · No charge. Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
 }
 export function confirmation(params) {
   const session=params.get('session_id');
-  if(session)return crumb('Test payment')+'<div class="page-title"><h1>Checking test payment</h1><p>Stripe is confirming the sandbox payment. Your order history updates after the signed webhook is processed.</p></div><div class="button-row">'+go('/orders','View Purchase History','btn primary')+go('/shop','Continue shopping','btn outline')+'</div>';
+  if(session)return crumb('Checkout')+'<div class="page-title"><h1>Checking order status</h1><p>Your order history will update once Stripe confirms the simulated payment.</p></div><div class="button-row">'+go('/orders','View Purchase History','btn primary')+go('/shop','Continue shopping','btn outline')+'</div>';
   const id=(params.get('id')??'').trim().toUpperCase();
   const order=buyerOrders().find(o=>o.id===id);
   return crumb('Order confirmed')+(order?
-    '<div class="page-title"><h1>Test order placed</h1><p>Your Stripe sandbox order is ready for processing.</p></div>'+orderDisplay(order)+
+    '<div class="page-title"><h1>Order preview completed</h1><p>Your simulated order has been recorded. No payment was collected.</p></div>'+orderDisplay(order)+
     '<div class="button-row order-actions">'+link(href('/orders',{view:'receive',id}),'Track order in To Receive','btn primary')+
-    go('/admin/orders/'+id,'View in admin','btn outline')+'</div>':
+    go('/shop','Continue shopping','btn outline')+'</div>':
     empty('Order not found','Check your purchase history.',go('/orders','View Purchase History','btn primary')));
 }
 export const savedPage=()=>crumb(go('/account','My Account'),'Saved items')+'<div class="page-title"><h1>Saved items</h1></div>'+
   (state.products.some(p=>p.status==='Published'&&state.saved.includes(p.id))?grid(state.products.filter(p=>p.status==='Published'&&state.saved.includes(p.id))):empty('No saved items','Save products using the heart on any product card.',go('/shop','Browse products','btn primary')));
 export function offers() {
   const active=state.coupons.filter(c=>c.active);
-  return crumb(go('/account','My Account'),'Offers')+'<div class="page-title"><h1>Offers</h1><p>Demo coupons for your shopping basket.</p></div>'+
+  return crumb(go('/account','My Account'),'Offers')+'<div class="page-title"><h1>Offers</h1></div>'+
     (active.length?'<div class="offer-grid">'+active.map(c=>'<article class="panel offer sage"><div class="overline">'+e(c.code)+'</div><h2>'+(c.type==='shipping'?'Free delivery':c.type==='fixed'?cash(c.amount)+' off':c.amount+'% off')+'</h2><p>Minimum basket subtotal '+cash(c.min)+'</p><button class="btn primary" data-copy="'+e(c.code)+'">Use this code</button></article>').join('')+'</div>':empty('No current offers','Browse everyday prices in the shop.',go('/shop','Shop all','btn primary')));
 }
 const pages={
   about:['About CP Value Mart','<h2>Everyday essentials in Singapore</h2><p>CP Value Mart brings together personal care, household cleaning, tissues and pantry essentials in one storefront. Shop by category, filter by brand or search for a product directly.</p>'],
-  delivery:['Delivery & returns',()=>'<h2>Singapore delivery</h2><p>Standard delivery is '+cash(state.settings.shipping)+'. Delivery is free when your merchandise subtotal reaches '+cash(state.settings.threshold)+'.</p><h2>Track your delivery</h2><p>In My account, open To Receive to see shipment status and tracking numbers.</p>'+link(href('/orders',{view:'receive'}),'Open To Receive ↗','text-link')+'<h2>Returns</h2><p>For a damaged or incorrect item, contact customer care with your order number and item details. These are demonstration policies.</p>'],
-  faq:['Frequently asked questions','<details open><summary>How do I find a brand?</summary><p>Select a category, then use the Brand filter. You can also enter a brand or SKU in search.</p></details><details><summary>Why do some items require more than one unit?</summary><p>Minimum quantities can vary by pack. Check the selected pack on the product page.</p></details><details><summary>How do I track my order?</summary><p>Sign in and open To Receive in My account. The tracking number appears after your order ships.</p></details><details><summary>Will I be charged?</summary><p>No real payment is accepted. Checkout uses Stripe test mode and test card details only.</p></details>'],
-  privacy:['Privacy','<h2>Your account</h2><p>Registration, email verification and sign-in use Supabase Auth. Your profile and delivery addresses are stored securely with access restricted to your account.</p><h2>Website traffic</h2><p>We count one visit and one add-to-cart event per browser tab each Singapore day using first-party session storage. Reports keep daily totals, without page paths or visitor identifiers. We use a temporary hashed network identifier to limit abusive traffic reports.</p><h2>Test orders</h2><p>Basket and order data are shared through the secured account API. Stripe test checkout identifiers and payment status are stored for sandbox testing; real card details are never accepted by this site.</p>'],
-  terms:['Terms of use','<h2>Test storefront</h2><p>Product prices, stock, promotions and delivery policies are examples. Checkout is limited to Stripe test mode and does not create a real purchase.</p>'],
-  contact:['Contact us','<form id="contact-form" class="form-stack"><p>Try the sample customer care form.</p><label>Email <input name="email" type="email" required maxlength="120"></label><label>Order number <input name="order" maxlength="24"></label><label>Message <textarea name="message" required maxlength="1000" rows="5"></textarea></label><button class="btn primary">Submit demo enquiry</button><p id="contact-status" role="status"></p></form>']
+  delivery:['Delivery & returns',()=>'<h2>Singapore delivery</h2><p>Standard delivery is '+cash(state.settings.shipping)+'. Delivery is free when your merchandise subtotal reaches '+cash(state.settings.threshold)+'.</p><h2>Track your delivery</h2><p>In My account, open To Receive to see shipment status and tracking numbers.</p>'+link(href('/orders',{view:'receive'}),'Open To Receive ↗','text-link')+'<h2>Returns</h2><p>For a damaged or incorrect item, contact customer care with your order number and item details.</p>'],
+  faq:['Frequently asked questions','<details open><summary>How do I find a brand?</summary><p>Select a category, then use the Brand filter. You can also enter a brand or SKU in search.</p></details><details><summary>Why do some items require more than one unit?</summary><p>Minimum quantities can vary by pack. Check the selected pack on the product page.</p></details><details><summary>How do I track my order?</summary><p>Sign in and open To Receive in My account. The tracking number appears after your order ships.</p></details><details><summary>Can I place an order online?</summary><p>Online ordering is currently unavailable. You can browse the catalogue and save items to your basket.</p></details>'],
+  privacy:['Privacy','<h2>Your account</h2><p>Registration, email verification and sign-in use Supabase Auth. Your profile and delivery addresses are stored securely with access restricted to your account.</p><h2>Website traffic</h2><p>We count one visit and one add-to-cart event per browser tab each Singapore day using first-party session storage. Reports keep daily totals, without page paths or visitor identifiers. We use a temporary hashed network identifier to limit abusive traffic reports.</p><h2>Shopping activity</h2><p>We store your basket and order history with your account. During a checkout preview, we store a Stripe checkout reference and the simulated payment status. The store does not collect card details.</p>'],
+  terms:['Terms of use','<h2>Shopping online</h2><p>You can browse products and save items to your basket. Online ordering is currently unavailable. For product or delivery enquiries, contact customer care.</p>'],
+  contact:['Contact us',()=>'<p>For product, delivery or account enquiries, email <a href="mailto:'+e(state.settings.support)+'">'+e(state.settings.support)+'</a>. If your enquiry concerns an order, please include the order number.</p>']
 };
 export function info(key) {
   const row=pages[key];
