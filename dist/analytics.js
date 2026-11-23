@@ -29,7 +29,7 @@ export function analyticsData({from,to},range,orders,traffic=[]) {
   for(const order of orders) {
     if(order.status==='Cancelled'||order.date<from||order.date>to) continue;
     const day=daily.get(order.date)??totalsRow();
-    day.sales+=0;
+    if(order.livePayment&&order.paymentStatus==='paid')day.sales+=order.totals.total;
     day.orders++;
     daily.set(order.date,day);
   }
@@ -121,9 +121,10 @@ const revenueMetrics=[
   {key:'cancelled',label:'Cancelled orders',unit:'count',value:row=>row.cancelled}
 ];
 function addRevenueOrder(bucket,order) {
+  if(!order.livePayment)return;
   if(order.status==='Cancelled') bucket.cancelled++;
-  else {
-    bucket.sales+=0;
+  else if(order.paymentStatus==='paid') {
+    bucket.sales+=order.totals.total;
     bucket.orders++;
   }
 }

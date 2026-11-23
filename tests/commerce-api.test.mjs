@@ -140,3 +140,49 @@ test('bulk delivery requires an admin and accepts versioned orders without track
   assert.equal(calls,2);
  });
 });
+
+test('live checkout requires a compatible key and pilot access, and rejects a mismatched provider session',async()=>{
+ const mode=env.STRIPE_CHECKOUT_MODE,secret=env.STRIPE_SECRET_KEY;
+ env.STRIPE_CHECKOUT_MODE='live-pilot';
+ let isAdmin=false,providerMode=false,created=0,released=0,attached=0;
+ try{
+  await mocked(async(url,options)=>{
+   const path=new URL(url).pathname;
+   if(path.endsWith('resolve_web_session'))return Response.json({account,isAdmin});
+   if(path.endsWith('/orders'))return Response.json([]);
+   if(path.endsWith('create_live_order')){created++;return Response.json({id:orderId,number:'CVM-2000',total_cents:1000,live_payment:true});}
+   if(path.endsWith('release_test_order')){released++;return Response.json(true);}
+   if(path.endsWith('attach_test_checkout')){attached++;return Response.json(true);}
+   assert.equal(path,'/v1/checkout/sessions');
+   assert.equal(options.headers.Authorization,'Bearer rk_live_fake');
+   return Response.json({id:'cs_live_fixture',url:'https://checkout.stripe.com/c/pay/cs_live_fixture',livemode:providerMode,amount_total:1000,currency:'sgd',client_reference_id:orderId});
+  },async()=>{
+   assert.equal((await call('/api/checkout/session',{addressId})).status,403);
+   env.STRIPE_SECRET_KEY='rk_live_fake';
+   assert.equal((await call('/api/checkout/session',{addressId})).status,403);
+   isAdmin=true;
+   assert.equal((await (await call('/api/checkout/session')).json()).available,true);
+   assert.equal((await call('/api/checkout/session',{addressId})).status,503);
+   providerMode=true;
+   const response=await call('/api/checkout/session',{addressId});
+   assert.equal(response.status,201);
+   assert.equal((await response.json()).order.livePayment,true);
+   assert.deepEqual([created,released,attached],[2,1,1]);
+  });
+ }finally{env.STRIPE_SECRET_KEY=secret;if(mode===undefined)delete env.STRIPE_CHECKOUT_MODE;else env.STRIPE_CHECKOUT_MODE=mode;}
+});
+
+test('checkout return resolves only the exact signed-in buyer session',async()=>{
+ await mocked(async url=>{
+  const link=new URL(url);
+  if(link.pathname.endsWith('resolve_web_session'))return Response.json({account,isAdmin:false});
+  assert.equal(link.searchParams.get('user_id'),'eq.'+userId);
+  const session=link.searchParams.get('stripe_checkout_session_id');
+  return Response.json(session==='eq.cs_live_owned'?[{id:orderId,order_number:2000,payment_status:'paid',live_payment:true}]:[]);
+ },async()=>{
+  assert.equal((await call('/api/checkout/status?session_id=cs_live_unowned')).status,404);
+  assert.equal((await call('/api/checkout/status?session_id=cs_live_owned&session_id=cs_live_unowned')).status,404);
+  const result=await (await call('/api/checkout/status?session_id=cs_live_owned')).json();
+  assert.equal(result.orderNumber,'CVM-2000');assert.equal(result.paymentStatus,'paid');assert.equal(result.livePayment,true);
+ });
+});

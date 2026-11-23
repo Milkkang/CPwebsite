@@ -45,7 +45,7 @@ function splitProducts(products) {
 function initialStore() {
   const products = splitProducts(catalogProducts);
   return {
-    products,orders:[],cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
+    products,orders:[],adminOrders:[],cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
     settings:{shipping:390,threshold:5000,support:'hello@cpvaluemart.com'},
     coupons:[]
   };
@@ -66,10 +66,11 @@ try {
     save();
   }
 } catch { state=initialStore(); }
-// Browser preview identities are never trusted as authenticated users.
-state.account=null;
+// Order and account information is scoped to the current signed-in browser session.
+state.account=null;state.orders=[];state.adminOrders=[];
+save();
 export function save() {
-  try { localStorage.setItem(key,JSON.stringify({...state,account:null,
+  try { localStorage.setItem(key,JSON.stringify({...state,account:null,orders:[],adminOrders:[],
     ...(state.account?{cart:{},saved:[],recentlyViewed:[]}:{})})); } catch {}
 }
 export function reset() { state=initialStore(); save(); }

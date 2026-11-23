@@ -122,3 +122,19 @@ test('Cloudflare config schedules finite retry processing and declares only secr
  for(const name of ['RESEND_API_KEY','RESEND_WEBHOOK_SECRET','TRANSACTIONAL_EMAIL_TEST_RECIPIENTS'])assert.match(config,new RegExp(name+': bindings\\.secret\\(\\)'));
  assert.doesNotMatch(config,/re_[A-Za-z0-9]{10}/);
 });
+
+test('live notifications send to the order recipient without rehearsal copy',async()=>{
+ const job={id:'11111111-1111-4111-8111-111111111115',kind:'order_confirmation',recipient:'live-buyer@example.invalid',
+  payload:{orderNumber:'CVM-2000',total:1500},is_test:false,idempotency_key:'order/live',attempt_count:1};
+ let sent;
+ await mocked(async(url,options)=>{
+  if(String(url).includes('reconcile_email_confirmations'))return Response.json(0);
+  if(String(url).includes('claim_email_jobs'))return Response.json([job]);
+  if(String(url)==='https://api.resend.com/emails'){sent=JSON.parse(options.body);return Response.json({id:'receipt_live'});}
+  if(String(url).includes('finish_email_attempt'))return Response.json(true);
+  throw Error('Unexpected request');
+ },async()=>assert.deepEqual(await processEmailJobs({...env,TRANSACTIONAL_EMAIL_TEST_RECIPIENTS:''}),{processed:1,configured:true}));
+ assert.deepEqual(sent.to,['live-buyer@example.invalid']);
+ assert.match(sent.text,/Order confirmed/);
+ assert.doesNotMatch(sent.text+sent.html,/simulated|test order|No funds/i);
+});

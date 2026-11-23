@@ -33,20 +33,20 @@ test('products show only selected page rows and preserve filters in pagination',
  }finally{state.products=old;}
 });
 test('Orders is a dedicated paged tab with group controls and contextual detail links',()=>{
- const old=state.orders;
+ const old=state.adminOrders;
  try{
-  state.orders=Array.from({length:125},(_,i)=>({id:'CVM-'+i,date:'2026-11-20',name:'QA',email:'qa@example.invalid',status:'Processing',tracking:'',items:[],totals:{total:100}}));
+  state.adminOrders=Array.from({length:125},(_,i)=>({id:'CVM-'+i,date:'2026-11-20',name:'QA',email:'qa@example.invalid',status:'Processing',tracking:'',items:[],totals:{total:100}}));
   const html=adminPage('orders',undefined,new URLSearchParams('size=50&page=2&group=quarter&sort=oldest'));
   assert.match(html,/>Orders<\/a>/);assert.match(html,/Showing 51–100 of 125 orders/);
   assert.match(html,/2026 Q4/);assert.match(html,/data-order-groups="expand"/);assert.match(html,/data-order-groups="collapse"/);
   assert.equal((html.match(/>Open ↗<\/a>/g)||[]).length,50);
   assert.match(html,/origin=orders/);assert.match(html,/sort=oldest/);
- }finally{state.orders=old;}
+ }finally{state.adminOrders=old;}
 });
 test('date filtering and monthly test sales exclude cancelled and unpaid orders',()=>{
- const old=state.orders;
+ const old=state.adminOrders;
  try{
-  state.orders=[
+  state.adminOrders=[
    {id:'CVM-1',backendId:'shipment-1',date:'2026-11-20',createdAt:'2026-11-20T02:00:00Z',name:'QA',email:'qa@example.invalid',status:'Shipped',paymentStatus:'paid',items:[],totals:{total:1250}},
    {id:'CVM-2',date:'2026-11-20',createdAt:'2026-11-20T01:00:00Z',name:'QA',email:'qa@example.invalid',status:'Cancelled',paymentStatus:'paid',items:[],totals:{total:2000}},
    {id:'CVM-3',date:'2026-10-19',createdAt:'2026-10-19T01:00:00Z',name:'QA',email:'qa@example.invalid',status:'Processing',paymentStatus:'pending',items:[],totals:{total:3000}}
@@ -65,5 +65,5 @@ test('date filtering and monthly test sales exclude cancelled and unpaid orders'
   assert.match(revenue,/1 simulated order · S\$12\.50/);
   assert.match(revenue,/\/admin\/orders\?from=2026-11-20&amp;to=2026-11-20/);
   assert.doesNotMatch(revenue,/S\$20\.00|S\$30\.00/);
- }finally{state.orders=old;}
+ }finally{state.adminOrders=old;}
 });

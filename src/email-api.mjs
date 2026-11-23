@@ -13,7 +13,7 @@ function allowedRecipients(env){
 function configReady(env){
  return typeof env.RESEND_API_KEY==='string'&&env.RESEND_API_KEY.startsWith('re_')&&
   typeof env.TRANSACTIONAL_EMAIL_FROM==='string'&&env.TRANSACTIONAL_EMAIL_FROM.includes('@')&&
-  typeof env.TRANSACTIONAL_EMAIL_REPLY_TO==='string'&&env.TRANSACTIONAL_EMAIL_REPLY_TO.includes('@')&&allowedRecipients(env).size>0;
+  typeof env.TRANSACTIONAL_EMAIL_REPLY_TO==='string'&&env.TRANSACTIONAL_EMAIL_REPLY_TO.includes('@');
 }
 function template(job){
  const number=String(job.payload?.orderNumber??'').replace(/[\r\n]+/g,' ').trim();
@@ -25,21 +25,21 @@ function template(job){
   shipment:['Order shipped',order+' is on its way.',tracking?'Tracking number: '+tracking:''],
   delivery:['Order delivered',order+' has been marked as delivered.'],
   cancellation:['Order cancelled',order+' has been cancelled.'],
-  test_refund:['Refund recorded','A simulated refund was recorded for '+(number?'order '+number:'your order')+'.']
+  test_refund:['Refund recorded',(job.is_test?'A simulated refund':'A refund')+' was recorded for '+(number?'order '+number:'your order')+'.']
  }[job.kind];
  if(!content)throw Error('UNKNOWN_EMAIL_KIND');
  const [title,...details]=content;
- const notice='This update is for a simulated order. No funds were transferred.';
+ const notice=job.is_test?'This update is for a simulated order. No funds were transferred.':'';
  const subject='CP Value Mart · '+title+(number?' · '+number:'');
  const lines=details.filter(Boolean);
  return {
   subject,
-  text:['CP Value Mart',title,...lines,notice].join('\n\n'),
-  html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title></head><body style="margin:0;background:#f3f6f2;color:#1f2d25;font-family:Arial,sans-serif;font-size:16px;line-height:1.5"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fff"><tr><td style="padding:28px"><p style="margin:0;color:#24533b;font-weight:bold">CP Value Mart</p><h1 style="margin:16px 0;font-size:24px">${escape(title)}</h1>${lines.map(line=>`<p style="margin:0 0 12px">${escape(line)}</p>`).join('')}<p style="margin:24px 0 0;border-top:1px solid #d9e2dc;padding-top:14px;font-size:14px">${escape(notice)}</p></td></tr></table></td></tr></table></body></html>`
+  text:['CP Value Mart',title,...lines,notice].filter(Boolean).join('\n\n'),
+  html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title></head><body style="margin:0;background:#f3f6f2;color:#1f2d25;font-family:Arial,sans-serif;font-size:16px;line-height:1.5"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fff"><tr><td style="padding:28px"><p style="margin:0;color:#24533b;font-weight:bold">CP Value Mart</p><h1 style="margin:16px 0;font-size:24px">${escape(title)}</h1>${lines.map(line=>`<p style="margin:0 0 12px">${escape(line)}</p>`).join('')}${notice?`<p style="margin:24px 0 0;border-top:1px solid #d9e2dc;padding-top:14px;font-size:14px">${escape(notice)}</p>`:''}</td></tr></table></td></tr></table></body></html>`
  };
 }
 async function send(job,env){
- if(job.is_test!==true||!allowedRecipients(env).has(String(job.recipient).toLowerCase()))return {success:false,retryable:false,error:'RECIPIENT_NOT_ALLOWED'};
+ if(job.is_test!==false&&(job.is_test!==true||!allowedRecipients(env).has(String(job.recipient).toLowerCase())))return {success:false,retryable:false,error:'RECIPIENT_NOT_ALLOWED'};
  let response;
  try{
   response=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),headers:{Authorization:'Bearer '+env.RESEND_API_KEY,
