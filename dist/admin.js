@@ -5,7 +5,7 @@ import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
 const nav=[['','Overview'],['revenue','Revenue'],['orders','Orders'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
-  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row"><span class="badge status-draft">Simulated orders</span>'+go('/','View storefront ↗','btn outline small')+'<button class="btn outline small" data-sign-out>Sign out</button></div></div></header>'+
+  return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row">'+go('/','View storefront ↗','btn outline small')+'<button class="btn outline small" data-sign-out>Sign out</button></div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
 }
 const heading=(title,subtitle='',actions='')=>'<div class="admin-heading"><div><h1>'+title+'</h1>'+(subtitle?'<p>'+subtitle+'</p>':'')+'</div><div class="button-row">'+actions+'</div></div>';
@@ -72,9 +72,9 @@ function revenuePage(params) {
     (dateError?'<p class="notice" role="status">'+e(dateError)+' Showing the last month.</p>':'')+'</section>'+
     revenueAnalytics(period,orders,filters,metric)+
     '<p class="subtle revenue-note">The sales calendar shows completed simulated orders. These amounts are excluded from business revenue.</p>'+
-    testSalesCalendar(params);
+    simulatedSalesCalendar(params);
 }
-function testSalesCalendar(params){
+function simulatedSalesCalendar(params){
  const currentYear=Number(orderDate().slice(0,4));
  const years=[...new Set([currentYear,...state.orders.map(o=>Number(o.date.slice(0,4)))])].filter(Number.isSafeInteger).sort((a,b)=>b-a);
  const requested=Number(params.get('year'));
@@ -102,7 +102,7 @@ function overview(params) {
   const periodOrders=state.orders.filter(o=>o.date>=from&&o.date<=to);
   const valid=periodOrders.filter(o=>o.status!=='Cancelled');
   const traffic=state.traffic?.filter(row=>row.day>=from&&row.day<=to)??[];
-  return heading('Overview','Simulated orders · Business revenue S$0.00.',go('/admin/products/new','Add product','btn primary'))+
+  return heading('Overview','',go('/admin/products/new','Add product','btn primary'))+
     '<div class="period-control"><nav class="period-options" aria-label="Order date range">'+periods.map(([key,label])=>
       '<a class="btn small '+(key===range?'chosen':'outline')+'" href="'+e(href('/admin',{...filters,range:key}))+'"'+(key===range?' aria-current="true"':'')+'>'+label+'</a>'
     ).join('')+'</nav><p class="subtle">'+(from===to?to:from+' to '+to)+'</p></div>'+
@@ -157,7 +157,7 @@ function ordersPage(params){
  const delivering=status==='Shipped';
  const eligible=delivering?canDeliverOrder:canShipOrder;
  const canSelect=groups.some(g=>g.orders.some(o=>o.backendId&&eligible(o)));
- return heading('Orders',rows.length+' orders · Singapore time · Simulated payments','<button class="btn outline" data-export="orders">Export all orders</button>')+
+ return heading('Orders',rows.length+(rows.length===1?' order':' orders')+' · Singapore time','<button class="btn outline" data-export="orders">Export all orders</button>')+
   '<nav class="order-stages" aria-label="Order status">'+orderStages.map(([stage,label])=>
    '<a href="'+stageLink(stage)+'"'+(status===stage?' aria-current="true"':'')+'><strong>'+(counts.get(stage)??0)+'</strong><span>'+label+'</span></a>'
   ).join('')+'</nav>'+
@@ -283,7 +283,7 @@ function customersPage() {
     if(o.status!=='Cancelled') c.spend+=o.totals.total;
     customers.set(o.email,c);
   }
-  return heading('Customers',customers.size+' shopper profiles from Simulated orders.')+
+  return heading('Customers',customers.size+(customers.size===1?' shopper profile':' shopper profiles'))+
     table(['Customer','Email','Orders','Order value',''],[...customers.values()].map(c=>'<tr><td><b>'+e(c.name)+'</b></td><td>'+e(c.email)+'</td><td>'+c.orders+'</td><td>'+cash(c.spend)+'</td><td>'+link(href('/admin',{q:c.email,range:'1y'}),'View orders ↗','text-link')+'</td></tr>').join('')||'<tr><td colspan="5">No customer orders yet.</td></tr>');
 }
 function salesTables(orders) {

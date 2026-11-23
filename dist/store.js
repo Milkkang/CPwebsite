@@ -42,15 +42,12 @@ function splitProducts(products) {
     };
   }));
 }
-function demoData() {
+function initialStore() {
   const products = splitProducts(catalogProducts);
   return {
     products,orders:[],cart:{},saved:[],recentlyViewed:[],account:null,nextOrder:1044,searches:{},coupon:'',
     settings:{shipping:390,threshold:5000,support:'hello@cpvaluemart.com'},
-    coupons:[
-      {code:'WELCOME5',type:'percent',amount:5,min:2000,active:true},
-      {code:'SHIPFREE',type:'shipping',amount:0,min:3500,active:true}
-    ]
+    coupons:[]
   };
 }
 const key='cvm-preview-13m-20261118-v1';
@@ -58,7 +55,7 @@ export let state;
 try {
   localStorage.removeItem('cvm-preview-2026-v2');
   const stored=JSON.parse(localStorage.getItem(key));
-  state=stored?.products && stored?.settings && stored?.orders ? stored : demoData();
+  state=stored?.products && stored?.settings && stored?.orders ? stored : initialStore();
   if(state.products.some(p=>p.variants.length!==1||p.id!==p.variants[0].sku)) {
     const oldProducts=state.products;
     const firstSku=new Map(oldProducts.map(p=>[p.id,p.variants[0]?.sku]));
@@ -68,14 +65,14 @@ try {
     for(const order of state.orders) for(const item of order.items) item.productId=item.sku;
     save();
   }
-} catch { state=demoData(); }
+} catch { state=initialStore(); }
 // Browser preview identities are never trusted as authenticated users.
 state.account=null;
 export function save() {
   try { localStorage.setItem(key,JSON.stringify({...state,account:null,
     ...(state.account?{cart:{},saved:[],recentlyViewed:[]}:{})})); } catch {}
 }
-export function reset() { state=demoData(); save(); }
+export function reset() { state=initialStore(); save(); }
 export function findProduct(id) { return state.products.find(p=>p.id===id); }
 export function getVariant(sku) {
   for (const product of state.products) {
