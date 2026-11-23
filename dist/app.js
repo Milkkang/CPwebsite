@@ -8,6 +8,7 @@ import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './cat
 const app=document.getElementById('app'), toast=document.getElementById('toast'), modal=document.getElementById('dialog');
 const imageDialog=document.getElementById('image-dialog');
 let lastPath='', lastProductView='', toastTimer, receiptTimer;
+let renderedAdminGate=null;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
@@ -261,6 +262,7 @@ function render({scroll=false}={}) {
   const [key='',id='',object='']=path.replace(/^\//,'').split('/');
   const admin=key==='admin';
   const adminRecovery=admin&&params.get('mode')==='recover';
+  const showAdminGate=admin&&(!auth.isAdmin||auth.recoveryOnly||adminRecovery);
   if(admin&&!adminRecovery&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
   const productView=key==='product'?path+'?'+(params.get('sku')??''):'';
   const publicCatalog=['','shop','search','categories','category','product','cart','offers'].includes(key);
@@ -272,9 +274,10 @@ function render({scroll=false}={}) {
   if(publicCatalog&&!remote) body='<section class="empty" role="status"><h2>Loading catalog…</h2></section>';
   else if(publicCatalog&&remote.error) body=storefrontFailure(remote.error);
   else if((auth.loading&&privateBuyerRoutes.has(path))||(shoppingLoading&&['cart','saved','recently-viewed'].includes(key)))body='<section class="panel narrow"><h1>My account</h1><p role="status">Loading your shopping list…</p></section>';
-  else if(admin) body=auth.isAdmin&&!auth.recoveryOnly&&!adminRecovery?
+  else if(showAdminGate) body=adminGate(params);
+  else if(admin) body=
     !adminProductsLoaded?'<main class="wrap" id="main"><section class="panel narrow"><h1>Products</h1><p role="status">'+e(adminProductsError||'Loading shared product data…')+'</p>'+(adminProductsError?'<button class="btn outline" data-retry-admin>Retry</button>':'')+'</section></main>':
-      adminPage(id,object,params,id==='settings'?'<div class="narrow account-settings">'+passwordPanel()+'</div>':''):adminGate(params);
+      adminPage(id,object,params,id==='settings'?'<div class="narrow account-settings">'+passwordPanel()+'</div>':'');
   else {
     switch(key) {
       case '': body=home(remote.data.products);break;
@@ -307,7 +310,11 @@ function render({scroll=false}={}) {
     }
   }
   document.body.classList.toggle('admin-body',admin);
-  app.innerHTML=admin?body:shopFrame(body,params.get('q')??'',{showAdminLink:key!=='account'});
+  const gate=showAdminGate?{route:location.hash, account:auth.account?.id, body}:null;
+  // Keep the form mounted when a background refresh leaves the route and session unchanged.
+  if(!gate||gate.route!==renderedAdminGate?.route||gate.account!==renderedAdminGate.account||gate.body!==renderedAdminGate.body)
+    app.innerHTML=admin?body:shopFrame(body,params.get('q')??'',{showAdminLink:key!=='account'});
+  renderedAdminGate=gate;
   if(!admin)trackTraffic('visit');
   const heading=app.querySelector('h1');
   document.title=(key&&heading?heading.textContent+' · ':'')+'CP Value Mart';
