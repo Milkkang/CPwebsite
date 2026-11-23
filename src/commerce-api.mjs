@@ -2,6 +2,7 @@ import { ApiError } from './catalog-api.mjs';
 import { isAllowedOrigin, bodyJSON, bodyText, db, identity } from './auth-api.mjs';
 
 const encoder=new TextEncoder();
+const orderUuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const safeId=value=>typeof value==='string'&&/^[a-f0-9-]{36}$/.test(value);
 const originGuard=request=>{
  if(!isAllowedOrigin(request))throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
@@ -84,7 +85,7 @@ async function webhook(request,env){
  if(!applied.ok)throw new ApiError(409,'PAYMENT_EVENT_REJECTED','Payment event was rejected.');
  return {status:200,data:{received:true}};
 }
-export const commerceRoute=path=>path==='/api/checkout/session'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/orders'||path==='/api/admin/order-actions';
+export const commerceRoute=path=>path==='/api/checkout/session'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/orders'||path==='/api/admin/orders/bulk-ship'||path==='/api/admin/order-actions';
 export async function handleCommerce(request,env){
  const path=new URL(request.url).pathname;
  if(path==='/api/stripe/webhook'){
@@ -129,6 +130,29 @@ export async function handleCommerce(request,env){
    if(!finished.ok||finished.data!==true)throw new ApiError(409,'OPERATION_PENDING','Provider operation recorded. Retry the same action to reconcile the order.');
   }
   return {status:200,data:{ok:true,testMode:true}};
+ }
+ if(path==='/api/admin/orders/bulk-ship'){
+  if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
+  originGuard(request);
+  const who=await identity(request,env);
+  if(!who.isAdmin)throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
+  const {orders}=await bodyJSON(request,96*1024);
+  if(!Array.isArray(orders)||orders.length<1||orders.length>100||orders.some(order=>
+   !order||typeof order.orderId!=='string'||!orderUuid.test(order.orderId)||!Number.isInteger(order.version)||
+   order.version<1||order.version>2147483647||typeof order.tracking!=='string'||!order.tracking.trim()||
+   order.tracking.length>120||/[\x00-\x1f\x7f]/.test(order.tracking)
+  )||new Set(orders.map(order=>order.orderId.toLowerCase())).size!==orders.length){
+   throw new ApiError(400,'INVALID_INPUT','Select up to 100 distinct orders and enter a tracking number for each.');
+  }
+  const changed=await db(env,'rpc/admin_bulk_ship_orders',{method:'POST',body:{
+   p_actor:who.account.id,p_orders:orders.map(order=>({id:order.orderId,version:order.version,tracking:order.tracking.trim()}))
+  },allowFailure:true});
+  if(!changed.ok){
+   if(changed.data?.code==='40001')throw new ApiError(409,'VERSION_CONFLICT','An order changed. Reopen Ship selected after selecting the latest orders.');
+   if(changed.data?.code==='42501')throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
+   throw new ApiError(503,'SHIPMENT_UNAVAILABLE','Could not confirm shipment. Refresh the order list before trying again.');
+  }
+  return {status:200,data:{shipped:changed.data}};
  }
  if(path==='/api/admin/orders'){
   if(!['GET','POST'].includes(request.method))throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');

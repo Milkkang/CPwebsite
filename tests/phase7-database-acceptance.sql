@@ -115,3 +115,63 @@ begin
  result:=public.resolve_web_session(repeat('b',64));
  if (result->>'isAdmin')::boolean then raise exception 'QA admin revocation ignored';end if;
 end $$;
+
+begin;
+do $$
+declare
+ buyer uuid:=gen_random_uuid();
+ admin uuid:=gen_random_uuid();
+ first_order uuid:='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+ second_order uuid:='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
+ address uuid:=gen_random_uuid();
+ shipments jsonb:=jsonb_build_array(
+   jsonb_build_object('id',first_order,'version',1,'tracking','TRACK-ONE'),
+   jsonb_build_object('id',second_order,'version',1,'tracking','TRACK-TWO'));
+begin
+ insert into auth.users(id,email,email_confirmed_at) values
+  (buyer,'bulk-buyer@example.invalid',now()),(admin,'bulk-admin@example.invalid',now());
+ insert into public.admin_roles(user_id) values(admin);
+ insert into public.buyer_addresses(id,user_id,full_name,address_line,postal_code)
+ values(address,buyer,'Synthetic','Synthetic','123456');
+ insert into public.orders(id,user_id,address_id,subtotal_cents,shipping_cents,discount_cents,total_cents,payment_status) values
+  (first_order,buyer,address,1000,0,0,1000,'paid'),
+  (second_order,buyer,address,1000,0,0,1000,'paid');
+ if has_function_privilege('anon','public.admin_bulk_ship_orders(uuid,jsonb)','EXECUTE') or
+    has_function_privilege('authenticated','public.admin_bulk_ship_orders(uuid,jsonb)','EXECUTE') then
+  raise exception 'bulk shipping is callable by an application role';
+ end if;
+
+ set local role service_role;
+ begin
+  perform public.admin_bulk_ship_orders(buyer,shipments);
+  raise exception 'bulk shipping accepted a non-admin actor';
+ exception when insufficient_privilege then null;
+ end;
+ begin
+  perform public.admin_bulk_ship_orders(admin,jsonb_set(shipments,'{1,version}','2'));
+  raise exception 'bulk shipping accepted a stale order version';
+ exception when serialization_failure then null;
+ end;
+ reset role;
+ if exists(select 1 from public.orders where id in (first_order,second_order) and fulfilment_status<>'Processing')
+    or exists(select 1 from public.email_jobs where order_id in (first_order,second_order) and kind='shipment') then
+  raise exception 'a stale batch partially shipped orders or queued email';
+ end if;
+
+ set local role service_role;
+ if public.admin_bulk_ship_orders(admin,shipments)<>2 then
+  raise exception 'bulk shipping returned an unexpected count';
+ end if;
+ begin
+  perform public.admin_bulk_ship_orders(admin,jsonb_set(shipments,'{0,version}','2'));
+  raise exception 'bulk shipping accepted an order that was already shipped';
+ exception when serialization_failure then null;
+ end;
+ reset role;
+ if (select count(*) from public.orders where fulfilment_status='Shipped' and version=2
+      and ((id=first_order and tracking_number='TRACK-ONE') or (id=second_order and tracking_number='TRACK-TWO')))<>2
+    or (select count(*) from public.email_jobs where order_id in (first_order,second_order) and kind='shipment')<>2 then
+  raise exception 'bulk shipping did not preserve per-order tracking and shipment email';
+ end if;
+end $$;
+rollback;

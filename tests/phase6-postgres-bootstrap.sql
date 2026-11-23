@@ -1,7 +1,7 @@
 -- Minimal Supabase-owned auth objects required by the repository migrations.
 create role anon;
 create role authenticated;
-create role service_role;
+create role service_role bypassrls;
 create schema auth;
 create schema extensions;
 create extension pgcrypto with schema extensions;
