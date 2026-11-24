@@ -154,7 +154,7 @@ export async function handleAuth(request,env) {
    if(read){const [home,delivery,coupons]=await Promise.all([
     db(env,'homepage_config?select=content,version&id=eq.home'),
     db(env,'delivery_rules?select=id,shipping_cents,free_threshold_cents,version&country_code=eq.SG&active=eq.true'),
-    db(env,'coupons?select=code,kind,amount,minimum_cents,active,version&order=code.asc')]);
+    db(env,'coupons?select=code,kind,amount,minimum_cents,active,version&deleted_at=is.null&order=code.asc')]);
     return result({homepage:home.data[0]??null,delivery:delivery.data[0]??null,coupons:coupons.data});}
    const data=await bodyJSON(request),version=data.version;
    if(!Number.isSafeInteger(version)||version<0)bad();
@@ -177,13 +177,22 @@ export async function handleAuth(request,env) {
     if(!r.data.length)throw new ApiError(409,'VERSION_CONFLICT','Delivery settings changed in another session. Reload before saving.');
     return result({delivery:r.data[0]});
    }
-   if(data.action==='coupon'){
+   if(data.action==='coupon'||data.action==='deleteCoupon'){
     const {code,kind,amount,minimum,active}=data;
-    if(typeof code!=='string'||!/^[A-Z0-9_-]{1,40}$/.test(code)||!['percent','fixed','shipping'].includes(kind)||
+    if(typeof code!=='string'||!/^[A-Z0-9_-]{1,40}$/.test(code))bad();
+    const target='coupons?'+new URLSearchParams({code:'eq.'+code,version:'eq.'+version,deleted_at:'is.null'});
+    if(data.action==='deleteCoupon'){
+     if(version===0)bad();
+     const r=await db(env,target,{method:'PATCH',body:{active:false,deleted_at:new Date().toISOString()}});
+     if(!r.data?.length)throw new ApiError(409,'VERSION_CONFLICT','Coupon changed in another session. Reload before deleting.');
+     return result({ok:true});
+    }
+    if(!['percent','fixed','shipping'].includes(kind)||
       !Number.isSafeInteger(amount)||amount<0||kind==='percent'&&amount>100||!Number.isSafeInteger(minimum)||minimum<0||typeof active!=='boolean')bad();
     const body={code,kind,amount,minimum_cents:minimum,active};
     const r=version===0?await db(env,'coupons',{method:'POST',body,allowFailure:true}):
-      await db(env,'coupons?'+new URLSearchParams({code:'eq.'+code,version:'eq.'+version}),{method:'PATCH',body});
+      await db(env,target,{method:'PATCH',body});
+    if(r.data?.code==='23505')throw new ApiError(409,'COUPON_CODE_TAKEN','This code is already in use or was previously deleted. Choose another code.');
     if(!r.ok||!r.data?.length)throw new ApiError(409,'VERSION_CONFLICT','Coupon changed in another session. Reload before saving.');
     return result({coupon:r.data[0]});
    }

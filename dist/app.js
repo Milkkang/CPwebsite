@@ -533,7 +533,7 @@ document.addEventListener('submit', async event=>{
       try{const code=String(data.get('code')??'').trim().toUpperCase(),kind=String(data.get('type')??''),number=Number(data.get('amount'));
         const amount=kind==='fixed'?cents(data.get('amount')):kind==='percent'?number:0,minimum=cents(data.get('min'));
         if(!/^[A-Z0-9_-]{1,40}$/.test(code)||!['percent','fixed','shipping'].includes(kind)||!Number.isSafeInteger(amount)||amount<0||!Number.isSafeInteger(minimum)||minimum<0)throw Error('Check the coupon code and amount.');
-        const result=await authRequest('/api/admin/config',{action:'coupon',version:couponVersions.get(code)??0,code,kind,amount,minimum,active:data.has('active')});
+        const result=await authRequest('/api/admin/config',{action:'coupon',version:form.dataset.code?couponVersions.get(code):0,code,kind,amount,minimum,active:data.has('active')});
         couponVersions.set(code,result.coupon.version);adminProductsLoaded=false;modal.close();await loadAdminProducts();message('Coupon saved.');}
       catch(problem){error=problem.message;}break;
     case 'homepage-form':
@@ -656,6 +656,17 @@ document.addEventListener('click', async event=>{
     button.disabled=true;
     try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});adminProductsLoaded=false;await loadAdminProducts();message('Order updated.');}
     catch(error){message(error.message);button.disabled=false;}
+  } else if('deleteCoupon' in data) {
+    const code=data.deleteCoupon,version=couponVersions.get(code);
+    if(button.disabled||!version||!window.confirm('Delete coupon '+code+'? The code will no longer work for new orders.'))return;
+    button.disabled=true;
+    try{
+      await authRequest('/api/admin/config',{action:'deleteCoupon',code,version});
+      couponVersions.delete(code);
+      state.coupons=state.coupons.filter(coupon=>coupon.code!==code);
+      if(state.coupon===code){state.coupon='';save();}
+      render();message('Coupon deleted.');
+    }catch(error){button.disabled=false;message(error.message);}
   } else if('editCoupon' in data) showModal(couponEditor(data.editCoupon));
   else if(data.export==='revenue') {
     exportRevenueReport(route().params);
