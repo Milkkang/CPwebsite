@@ -9,7 +9,7 @@ export function adminFrame(page,body) {
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
 }
 const heading=(title,subtitle='',actions='')=>'<div class="admin-heading"><div><h1>'+title+'</h1>'+(subtitle?'<p>'+subtitle+'</p>':'')+'</div><div class="button-row">'+actions+'</div></div>';
-const table=(headers,rows)=>'<div class="panel table-wrap"><table><thead><tr>'+headers.map(h=>'<th scope="col">'+h+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+const table=(headers,rows,extra='')=>'<div class="panel table-wrap'+extra+'"><table><thead><tr>'+headers.map(h=>'<th scope="col">'+h+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
 const field=(label,name,value,options='')=>'<label>'+label+'<input name="'+name+'" value="'+e(value)+'" '+options+'></label>';
 const amountInput=(label,name,cents)=>field(label,name,(cents/100).toFixed(2),'type="number" min="0" max="99999" step="0.01" required');
 const moneyToCents=value=>Math.round(Number(value)*100);
@@ -182,25 +182,74 @@ function productList(params) {
     .filter(row=>row.variants.length);
   const paging=listPage(params,rows.length),pagination=listPagination('/admin/products',params,paging,rows.length,'Products');
   return heading('Products',rows.length+' of '+state.products.length+' products',
-    '<button class="btn outline" data-export="products">Export CSV</button><button class="btn outline" data-export="template">Import template</button><label class="btn outline">Import CSV / Excel<input type="file" id="import-csv" accept=".csv,.xlsx" hidden></label>'+go('/admin/products/new','Add product','btn primary'))+
-    '<p class="subtle import-hint">Edit variant name, price, MOQ or status directly; changes save when you leave the field.</p>'+
+    '<button class="btn outline" data-export="products">Export CSV</button><button class="btn outline" data-export="template">Import template</button><label class="btn outline">Import CSV / Excel<input type="file" id="import-csv" accept=".csv,.xlsx" hidden></label>'+link(href('/admin/products/new',Object.fromEntries(params)),'Add product','btn primary'))+
     '<form class="admin-filters" id="admin-filter" data-path="/admin/products">'+field('Find product','q',q,'placeholder="Name, brand or SKU"')+
     '<label>Status<select name="status"><option value="">All statuses</option>'+opts(['Published','Draft','Archived'],status)+'</select></label>'+
     '<label>Availability<select name="low"><option value="">All stock levels</option><option value="1"'+selected(low,true)+'>Low stock (5 or fewer)</option></select></label>'+pageSize(paging.size,'Products per page')+'<button class="btn outline">Filter</button></form>'+pagination+
     (!rows.length?empty('No matching products','Adjust or clear the product filters.'):
-    table(['Product','Variant','Price (SGD)','Stock','MOQ','Status',''],rows.slice(paging.start,paging.start+paging.size).map(row=>productRows(row,params)).join('')))+pagination;
+    '<div class="product-bulk button-row"><label class="check-label"><input type="checkbox" data-select-products> Select page</label><span class="subtle" data-product-count role="status">0 selected</span><button type="button" class="btn outline" data-bulk-prices disabled>Change selected prices</button></div>'+
+    table(['<span class="sr-only">Select</span>','Product','Variant','Price (SGD)','Stock','MOQ','Status','Actions'],rows.slice(paging.start,paging.start+paging.size).map(row=>productRows(row,params)).join(''),' product-table'))+pagination;
+}
+const inlineFields={
+  productName:['Product name','maxlength="500"'],
+  variantName:['Variant name','maxlength="60"'],
+  price:['Price in SGD','inputmode="decimal"'],
+  stock:['Stock on hand','type="number" min="0" max="1000000" step="1"'],
+  min:['Minimum quantity','type="number" min="1" max="100000" step="1"']
+};
+function inlineField(kind,sku,value) {
+  const [label,attributes]=inlineFields[kind];
+  return '<button type="button" class="product-value" data-edit-value="'+kind+'" aria-label="Edit '+label+' for '+e(sku)+'">'+e(value)+'</button>'+
+    '<form class="product-inline" data-product-edit="inline" data-sku="'+e(sku)+'" hidden>'+
+    '<input name="'+kind+'" aria-label="'+label+'" value="'+e(value)+'" '+attributes+' required>'+
+    '<button type="submit" class="btn primary small" aria-label="Save '+label+'">✓</button>'+
+    '<button type="button" class="btn outline small" data-cancel-product aria-label="Cancel editing '+label+'">×</button>'+productEditStatus()+'</form>';
 }
 function productRows({p,variants},params) {
   const span=' rowspan="'+variants.length+'"';
-  const product=productLabel(p,'<b>'+e(p.name)+'</b><small>'+e(p.brand)+' · '+e(p.sku)+'</small>'+
-    '');
+  const product=productLabel(p,inlineField('productName',p.sku,p.name)+'<small>'+e(p.brand)+' · '+e(p.sku)+'</small>');
   return variants.map((v,i)=>'<tr class="'+(i===0?'product-row-start':'')+'">'+
+    '<td><input type="checkbox" data-select-product value="'+e(v.sku)+'" aria-label="Select '+e(v.sku)+'"></td>'+
     (i===0?'<td'+span+'>'+product+'</td>':'')+
-    '<td><div class="admin-variant">'+photo(p,'variant-thumb',v)+'<div>'+inlineField('name',v.sku,v.name,'text','maxlength="60"')+'<small>'+e(v.sku)+'</small></div></div></td>'+
-    '<td class="variant-number">'+inlineField('price',v.sku,(v.price/100).toFixed(2),'number','min="0" max="99999" step="0.01"')+'</td><td class="variant-stock"><span>'+v.stock+'</span><button type="button" class="btn outline small" data-stock="'+e(v.sku)+'" aria-label="Adjust stock for '+e(v.sku)+'">Adjust</button></td><td>'+inlineField('min',v.sku,v.min,'number','min="1" max="100000" step="1"')+'</td>'+
-    (i===0?'<td'+span+'><select class="inline-status" data-inline-status="'+e(p.id)+'" aria-label="Status for '+e(p.name)+'">'+opts(['Published','Draft','Archived'],p.status)+'</select></td><td'+span+'>'+link(editHref(p,params),'Edit ↗','text-link')+'</td>':'')+'</tr>').join('');
+    '<td><div class="admin-variant">'+photo(p,'variant-thumb',v)+'<div>'+inlineField('variantName',v.sku,v.name)+'<small>'+e(v.sku)+'</small></div></div></td>'+
+    '<td class="variant-number">'+inlineField('price',v.sku,(v.price/100).toFixed(2))+'</td>'+
+    '<td class="variant-stock">'+inlineField('stock',v.sku,v.stock)+'</td><td>'+inlineField('min',v.sku,v.min)+'</td>'+
+    (i===0?'<td'+span+'><button type="button" class="product-value" data-product-popover="'+e(p.id)+'" aria-haspopup="dialog">'+e(p.status)+' <span aria-hidden="true">▾</span></button></td>'+
+      '<td'+span+'><div class="product-row-actions"><button type="button" class="btn outline small" data-expand-product="'+e(p.id)+'" aria-expanded="false" aria-controls="product-fields-'+e(p.id)+'">Expand</button>'+
+      '<button type="button" class="btn outline small" data-product-drawer="'+e(p.id)+'">Details</button>'+link(editHref(p,params),'Full editor','text-link')+'</div></td>':'')+'</tr>').join('')+
+    '<tr class="product-expanded" id="product-fields-'+e(p.id)+'" hidden><td colspan="8"><form class="form-stack" data-product-edit="row" data-sku="'+e(p.sku)+'">'+
+    '<h3>Variant and inventory</h3><div class="field-grid">'+field('Variant name','variantName',p.variants[0].name,'required maxlength="60"')+
+    field('Stock on hand','stock',p.variants[0].stock,'type="number" min="0" max="1000000" step="1" required')+
+    field('Minimum quantity','min',p.variants[0].min,'type="number" min="1" max="100000" step="1" required')+'</div>'+productEditActions()+'</form></td></tr>';
 }
-const inlineField=(kind,sku,value,type,extra)=>'<input class="inline-edit inline-'+kind+'" type="'+type+'" data-inline="'+kind+'" data-sku="'+e(sku)+'" aria-label="'+({name:'Variant name',price:'Price in SGD',min:'Minimum quantity'}[kind])+' for '+e(sku)+'" value="'+e(value)+'" '+extra+' required>';
+function productEditStatus() {
+  return '<p class="notice product-edit-status" role="status" hidden></p>';
+}
+function productEditActions() {
+  return '<div class="button-row"><button class="btn primary small">Save changes</button><button type="button" class="btn outline small" data-cancel-product>Cancel</button></div>'+productEditStatus();
+}
+export function productCategoryEditor(p) {
+  return '<form class="form-stack" data-product-edit="category" data-sku="'+e(p.sku)+'">'+
+    '<label>Category<select name="category">'+cats(p.category)+'</select></label>'+
+    '<label>Status<select name="status">'+opts(['Published','Draft','Archived'],p.status)+'</select></label>'+productEditActions()+'</form>';
+}
+export function productDetailsEditor(p) {
+  return '<form class="form-stack" data-product-edit="details" data-sku="'+e(p.sku)+'">'+
+    productLabel(p,'<b>'+e(p.name)+'</b><small>'+e(p.sku)+'</small>')+
+    field('Product name','productName',p.name,'required maxlength="500"')+
+    field('Brand','brand',p.brand,'required maxlength="70"')+
+    '<label>Description<textarea name="description" rows="4" maxlength="1000">'+e(p.description)+'</textarea></label>'+
+    field('Search keywords','keywords',p.keywords,'maxlength="300"')+
+    field('R2 image URL','image',p.image,'maxlength="350" placeholder="https://…"')+productEditActions()+'</form>';
+}
+export function productPriceEditor(rows) {
+  return '<form class="form-stack" data-product-edit="bulk"><h2 id="product-overlay-title">Change prices</h2>'+
+    '<p class="subtle">'+rows.length+' selected · SGD</p><div class="table-wrap"><table><thead><tr><th scope="col">SKU</th><th scope="col">Current</th><th scope="col">New price</th></tr></thead><tbody>'+
+    rows.map(({sku,price})=>'<tr><th scope="row">'+e(sku)+'</th><td>'+cash(price)+'</td><td><input name="'+e(sku)+'" aria-label="New SGD price for '+e(sku)+'" inputmode="decimal" value="'+(price/100).toFixed(2)+'" required></td></tr>').join('')+
+    '</tbody></table></div><div data-price-preview hidden></div><div class="button-row"><button class="btn primary small">Preview changes</button>'+
+    '<button type="button" class="btn outline small" data-edit-prices hidden>Back to prices</button>'+
+    '<button type="button" class="btn outline small" data-cancel-product>Cancel</button></div>'+productEditStatus()+'</form>';
+}
 export function updateInlineProduct(kind,sku,value) {
   const row=state.products.find(p=>p.variants.some(v=>v.sku===sku));
   if(!row) return 'Product no longer exists.';
@@ -232,7 +281,7 @@ function variantFields(v={},i=0,p={},allowRemove=true) {
     field('Name','variantName',v.name??'','required maxlength="60"')+
     field('Variant SKU','variantSku',v.sku??'','required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+"')+
     field('Price (SGD)','variantPrice',v.price===undefined?'':(v.price/100).toFixed(2),'type="number" min="0" max="99999" step="0.01" required')+
-    field('Stock','variantStock',v.stock??'','type="number" min="0" max="100000" step="1" required')+
+    field('Stock','variantStock',v.stock??'','type="number" min="0" max="1000000" step="1" required')+
     field('Minimum qty','variantMin',v.min??'','type="number" min="1" max="100000" step="1" required')+
     '<div class="variant-image-field"><span data-variant-photo>'+photo(p,'thumb',v)+'</span>'+
     field('Variant image URL','variantImage',v.image??'','maxlength="350" placeholder="https://…"')+'</div></fieldset>';
@@ -241,7 +290,8 @@ export function productEditor(id,params=new URLSearchParams()) {
   const existing=findProduct(id);
   if(id!=='new'&&!existing) return empty('Product not found','Return to the product list.',go('/admin/products','View products','btn primary'));
   const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]};
-  return link(href('/admin/products',Object.fromEntries(params)),'← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
+  const back=href('/admin/products',Object.fromEntries(params));
+  return link(back,'← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
     '<form id="product-editor" data-id="'+e(existing?.id??'')+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
     field('Product name','name',p.name,'required maxlength="500"')+field('Brand','brand',p.brand,'required maxlength="70"')+
     field('Parent SKU','sku',p.sku,'required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+" '+(existing?'readonly':''))+
@@ -251,7 +301,7 @@ export function productEditor(id,params=new URLSearchParams()) {
     field('Search keywords','keywords',p.keywords,'maxlength="300" placeholder="English names, 中文 keywords, common abbreviations"')+
     field('R2 image URL','image',p.image,'maxlength="350" placeholder="https://…"')+'</section>'+
     '<section class="panel form-stack"><div class="section-title"><h2>Listing, stock and price</h2></div><p class="subtle">Each SKU is one listing. Enter the same SKU in both fields.</p><div id="variant-fields">'+(p.variants.length?p.variants:[{name:'',sku:'',price:0,stock:0,min:1,image:''}]).slice(0,1).map((v,i)=>variantFields(v,i,p,false)).join('')+'</div></section>'+
-    '<div class="button-row"><button class="btn primary">Save product</button>'+go('/admin/products','Cancel','btn outline')+'</div></form>';
+    '<div class="button-row"><button class="btn primary">Save product</button>'+link(back,'Back to products','btn outline')+'<button type="button" class="btn outline" data-discard-draft hidden>Discard draft</button></div><p class="subtle" data-draft-status role="status"></p>'+productEditStatus()+'</form>';
 }
 function ordersTable(rows,filters,eligible) {
   const headers=['Order','Customer','Products','Date','Status','Total',''];
@@ -378,10 +428,6 @@ export function extraVariant() {
   if(fields.children.length>=15) return 'You can add up to 15 variants per product.';
   fields.insertAdjacentHTML('beforeend',variantFields({name:''},fields.children.length,Object.fromEntries(new FormData(fields.closest('form')))));
   fields.lastElementChild.querySelector('[name=variantName]').focus();
-}
-export function stockEditor(sku,variant,product) {
-  return '<form class="form-stack" id="stock-editor" data-sku="'+e(sku)+'"><h2 id="dialog-title">Adjust inventory</h2>'+productLabel(product,'<b>'+e(product.name)+'</b><small>'+e(sku)+'</small>',variant)+
-    field('Stock on hand','stock',variant.stock,'type="number" min="0" max="100000" required')+'<button class="btn primary">Save stock</button></form>';
 }
 export function couponEditor(code) {
   const c=state.coupons.find(row=>row.code===code)??{code:'',type:'percent',amount:5,min:0,active:true};

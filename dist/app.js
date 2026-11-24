@@ -2,7 +2,8 @@ import {productFileCsv} from './import-file.js';
 import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
 import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
 import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
-import {adminPage,canShipOrder,canDeliverOrder,extraVariant,stockEditor,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos,updateInlineProduct,updateInlineStatus} from './admin.js';
+import {adminPage,canShipOrder,canDeliverOrder,extraVariant,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos} from './admin.js';
+import {initProductEditing} from './product-editing.js';
 import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
 
 const app=document.getElementById('app'), toast=document.getElementById('toast'), modal=document.getElementById('dialog');
@@ -99,7 +100,7 @@ async function loadAdminProducts() {
 async function writeAdminProduct(sku,version,fields,stock) {
   const result=await authRequest('/api/admin/products',{sku,version,fields,...(stock===undefined?{}:{stock})});
   const product=listingFromApi(result.product,{admin:true});
-  rememberListings([product]);
+  rememberListings([product],{admin:true});
   return product;
 }
 function homepagePayload(values) {
@@ -130,6 +131,16 @@ function productFormPayload(form,data) {
   if(!fields.name||!fields.variant_name||!fields.brand||!categories.some(([id])=>id===fields.category_id))throw Error('Complete the product name, variant, brand and category.');
   return {sku,fields,stock};
 }
+const productEditing=initProductEditing({
+  app,account:()=>auth.isAdmin&&!auth.recoveryOnly?auth.account?.id:undefined,
+  render,writeProduct:writeAdminProduct,writePrices:rows=>authRequest('/api/admin/import',{rows}),
+  refreshProducts:async()=>{
+    const owner=auth.account?.id;
+    const result=await authRequest('/api/admin/products');
+    if(owner===auth.account?.id&&auth.isAdmin)state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
+  },
+  fullPayload:productFormPayload,message
+});
 let shoppingOwner,shoppingLoading=false;
 async function loadMemberShopping() {
   const owner=auth.account?.id;
@@ -166,7 +177,8 @@ async function setShoppingCart(sku,quantity) {
   throw Error('Sign in to add products to your basket.');
 }
 function storefrontKey(path,params) { return path+'?'+params.toString(); }
-function rememberListings(rows) {
+function rememberListings(rows,{admin=false}={}) {
+  if(!admin&&route().path.startsWith('/admin'))return;
   for(const product of rows) {
     const index=state.products.findIndex(row=>row.id===product.id);
     if(index<0)state.products.push(product);else state.products[index]=product;
@@ -304,7 +316,7 @@ function returnAfterSignIn(next) {
   if(privateBuyerRoutes.has(path)) return navigate(path,Object.fromEntries(new URLSearchParams(qs)));
   navigate('/account');
 }
-function render({scroll=false}={}) {
+function render({scroll=false,refreshProductEditor=false}={}) {
   state.account=auth.account&&!auth.recoveryOnly?auth.account:null;
   refreshReceipts();
   const {path,params}=route();
@@ -313,6 +325,7 @@ function render({scroll=false}={}) {
   const adminRecovery=admin&&params.get('mode')==='recover';
   const showAdminGate=admin&&(!auth.isAdmin||auth.recoveryOnly||adminRecovery);
   if(admin&&!adminRecovery&&auth.isAdmin&&!adminProductsLoaded&&!adminProductsLoading&&!adminProductsError)loadAdminProducts();
+  if(!productEditing.beforeRender(location.hash,auth.isAdmin&&!auth.recoveryOnly&&!showAdminGate?auth.account?.id:undefined,refreshProductEditor))return;
   const productView=key==='product'?path+'?'+(params.get('sku')??''):'';
   const publicCatalog=['','shop','search','categories','category','product','cart','checkout','delivery','offers'].includes(key);
   if(publicCatalog&&path!==lastPath&&storefront.key===storefrontKey(path,params))storefront={key:'',data:null,error:null};
@@ -370,6 +383,7 @@ function render({scroll=false}={}) {
   const heading=app.querySelector('h1');
   document.title=(key&&heading?heading.textContent+' · ':'')+'CP Value Mart';
   if(scroll&&path!==lastPath) window.scrollTo(0,0);
+  productEditing.afterRender();
   lastPath=path;
   if(!productView)lastProductView='';
 }
@@ -508,11 +522,6 @@ document.addEventListener('submit', async event=>{
     case 'buyer-review-form':
       error=saveBuyerReview(form.dataset.order,form.dataset.sku,Number(f.rating),f.comment);
       if(!error) {modal.close();render();message('Rating submitted.');} break;
-    case 'product-editor':
-      try{const payload=productFormPayload(form,data);const existing=form.dataset.id?findProduct(form.dataset.id):null;
-        await writeAdminProduct(payload.sku,existing?.version??0,payload.fields,payload.stock);
-        navigate('/admin/products',Object.fromEntries(route().params));message('Product saved.');}
-      catch(problem){error=problem.message;}break;
     case 'order-editor': {
       const order=state.adminOrders.find(row=>row.id===form.dataset.order),shipItem=event.submitter?.name==='ship-item';
       if(!order?.backendId){error='Order not found.';break;}
@@ -527,12 +536,6 @@ document.addEventListener('submit', async event=>{
         const result=await authRequest('/api/admin/config',{action:'coupon',version:couponVersions.get(code)??0,code,kind,amount,minimum,active:data.has('active')});
         couponVersions.set(code,result.coupon.version);adminProductsLoaded=false;modal.close();await loadAdminProducts();message('Coupon saved.');}
       catch(problem){error=problem.message;}break;
-    case 'stock-editor': {
-      const row=getVariant(form.dataset.sku);
-      if(!row) {error='Product no longer exists.';break;}
-      try{await writeAdminProduct(row.product.sku,row.product.version,{},Number(f.stock));modal.close();render();message('Stock updated.');}
-      catch(problem){error=problem.message;}break;
-    }
     case 'homepage-form':
       try{const result=await authRequest('/api/admin/config',{action:'homepage',version:homepageVersion,content:homepagePayload(data)});
         homepageVersion=result.homepage.version;state.settings.homepage=result.homepage.content;render();message('Homepage saved.');}
@@ -645,10 +648,7 @@ document.addEventListener('click', async event=>{
       fieldset.querySelector('[data-remove-variant]').setAttribute('aria-label','Delete variant '+(i+1));
     });
   }
-  else if('stock' in data) {
-    const row=getVariant(data.stock);
-    if(row) showModal(stockEditor(data.stock,row.variant,row.product));
-  } else if('orderAction' in data) {
+  else if('orderAction' in data) {
     const order=state.adminOrders.find(row=>row.id===data.orderId);
     if(!order?.backendId)return;
     const restock=Boolean(document.getElementById('refund-restock')?.checked);
@@ -684,29 +684,13 @@ document.addEventListener('input',event=>{
 });
 document.addEventListener('change',async event=>{
   const input=event.target;
+  if(input.form?.dataset.productEdit||input.form?.id==='product-editor')return;
   if('selectOrder' in input.dataset||'selectPageOrders' in input.dataset){updateOrderSelection(input);return;}
   if(input.form?.id==='checkout-form'&&input.name==='addressId'){
     for(const card of input.form.querySelectorAll('[data-checkout-address]'))card.hidden=card.dataset.checkoutAddress!==input.value;
     return;
   }
   if(location.hash.startsWith('#/admin')){try{await authRequest('/api/admin/access');}catch(error){await refreshSession();message(error.message);return;}}
-  if(input.dataset.inline) {
-    const row=getVariant(input.dataset.sku);
-    if(!row){message('Product no longer exists.');return;}
-    const kind=input.dataset.inline, value=input.value.trim();let fields;
-    if(kind==='name'&&value&&value.length<=60)fields={variant_name:value};
-    else if(kind==='price'&&/^\d+(?:\.\d{1,2})?$/.test(value)&&Number(value)>0)fields={price_cents:Math.round(Number(value)*100)};
-    else if(kind==='min'&&/^[1-9]\d*$/.test(value))fields={min_quantity:Number(value)};
-    if(!fields){message('Enter a valid product value.');input.value=input.defaultValue;return;}
-    try{await writeAdminProduct(row.product.sku,row.product.version,fields);render();message('Product updated.');}
-    catch(error){message(error.message);input.value=input.defaultValue;}return;
-  }
-  if(input.dataset.inlineStatus) {
-    const product=findProduct(input.dataset.inlineStatus);
-    if(!product||!['Published','Draft','Archived'].includes(input.value)){message('Choose a valid status.');render();return;}
-    try{await writeAdminProduct(product.sku,product.version,{status:input.value});render();message('Status updated.');}
-    catch(error){message(error.message);render();}return;
-  }
   if(input.id==='category-filter') {
     const q=route().params.get('q');
     location.hash=(input.value==='#/shop'&&q?href('/shop',{q}):input.value);
@@ -728,7 +712,7 @@ document.addEventListener('change',async event=>{
   }
 });
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'){storefront={key:'',data:null,error:null};adminProductsLoaded=false;refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}
+  if(document.visibilityState==='visible'){storefront={key:'',data:null,error:null};if(!productEditing.isEditing())adminProductsLoaded=false;refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}
 });
 window.addEventListener('pageshow',event=>{if(event.persisted){storefront={key:'',data:null,error:null};refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}});
 window.addEventListener('hashchange',()=>{if(imageDialog.open)imageDialog.close();if(modal.open)modal.close();render({scroll:true});});
