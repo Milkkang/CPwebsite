@@ -97,8 +97,8 @@ async function loadAdminProducts() {
   }catch(error){adminProductsError=error.message;adminProductsLoaded=false;}
   finally{adminProductsLoading=false;render();}
 }
-async function writeAdminProduct(sku,version,fields,stock) {
-  const result=await authRequest('/api/admin/products',{sku,version,fields,...(stock===undefined?{}:{stock})});
+async function writeAdminProduct(sku,version,fields,stock,variantOf) {
+  const result=await authRequest('/api/admin/products',{sku,version,fields,stock,variantOf});
   const product=listingFromApi(result.product,{admin:true});
   rememberListings([product],{admin:true});
   return product;
@@ -117,8 +117,9 @@ function homepagePayload(values) {
 const cents=value=>/^\d+(?:\.\d{1,2})?$/.test(String(value))?Math.round(Number(value)*100):NaN;
 function productFormPayload(form,data) {
   const one=name=>String(data.get(name)??'').trim();
-  const sku=one('sku'),variantSku=one('variantSku');
-  if(data.getAll('variantSku').length!==1||variantSku!==sku)throw Error('Each listing uses one variant with the same SKU as the product.');
+  const variantOf=form.dataset.variantOf||undefined;
+  const variantSku=one('variantSku'),sku=variantOf?variantSku:one('sku');
+  if(data.getAll('variantSku').length!==1||variantSku!==sku||!/^[A-Za-z0-9_-]{1,100}$/.test(sku))throw Error('Enter a valid SKU. For a product listing, use the same SKU in both fields.');
   const price=one('variantPrice');
   if(!/^\d+(?:\.\d{1,2})?$/.test(price)||Number(price)<=0)throw Error('Enter a valid price.');
   const stock=Number(one('variantStock')),min=Number(one('variantMin'));
@@ -129,7 +130,7 @@ function productFormPayload(form,data) {
     description:one('description'),keywords:one('keywords'),status:one('status'),featured:data.has('featured'),
     image_url:image,r2_image_url:image,price_cents:Math.round(Number(price)*100),min_quantity:min};
   if(!fields.name||!fields.variant_name||!fields.brand||!categories.some(([id])=>id===fields.category_id))throw Error('Complete the product name, variant, brand and category.');
-  return {sku,fields,stock};
+  return {sku,fields,stock,variantOf};
 }
 const productEditing=initProductEditing({
   app,account:()=>auth.isAdmin&&!auth.recoveryOnly?auth.account?.id:undefined,
@@ -201,10 +202,11 @@ function ensureStorefront(path,params) {
     let data;
     if(section==='product') {
       const result=await catalogRequest('/api/products/'+encodeURIComponent(id));
-      data={product:listingFromApi(result.product)};
+      data={product:listingFromApi(result.product),options:result.options??[]};
       rememberListings([data.product]);
       const related=await catalogRequest(catalogQuery(new URLSearchParams('size=30'),data.product.category));
-      data.related=related.products.map(listingFromApi).filter(row=>row.id!==data.product.id).slice(0,4);
+      const optionsSkus=new Set([data.product.sku,...data.options.map(option=>option.sku)]);
+      data.related=related.products.map(listingFromApi).filter(row=>!optionsSkus.has(row.sku)).slice(0,4);
       rememberListings(data.related);
     } else if(section==='categories'||section==='delivery') data={};
     else if(['cart','checkout','offers'].includes(section)){
@@ -354,7 +356,7 @@ function render({scroll=false,refreshProductEditor=false}={}) {
           if(auth.account&&!auth.recoveryOnly)authRequest('/api/shopping',{action:'recent',sku:product.sku}).then(loadMemberShopping).catch(()=>{});
         }
         lastProductView=productView;
-        body=detail(product,params,remote.data.related);break;
+        body=detail(product,params,remote.data.related,remote.data.options);break;
       }
       case 'cart': body=cart(repurchaseResult);break;
       case 'checkout': {

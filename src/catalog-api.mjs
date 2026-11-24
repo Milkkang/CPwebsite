@@ -74,9 +74,14 @@ export async function readCatalog(request, env, route) {
     let sku;
     try { sku = decodeURIComponent(url.pathname.split('/').at(-1)); } catch { fail('Invalid SKU.'); }
     if (!/^[A-Za-z0-9_-]{1,100}$/.test(sku)) fail('Invalid SKU.');
-    const rows = await database(env,'products?' + new URLSearchParams({ select:'id,sku,name,variant_name,brand,category_id,description,keywords,status,featured,image_url,original_image_url,r2_image_url,price_cents,currency,stock,available_quantity,min_quantity,version',sku:'eq.'+sku,status:'eq.Published',limit:'1' }));
+    const rows = await database(env,'products?' + new URLSearchParams({ select:'id,sku,variant_of,name,variant_name,brand,category_id,description,keywords,status,featured,image_url,original_image_url,r2_image_url,price_cents,currency,stock,available_quantity,min_quantity,version',sku:'eq.'+sku,status:'eq.Published',limit:'1' }));
     if (!rows.length) throw new ApiError(404, 'PRODUCT_NOT_FOUND', 'Product not found.');
-    return { product: rows[0] };
+    const {variant_of,...product}=rows[0];
+    const group=variant_of??sku;
+    const options=await database(env,'products?'+new URLSearchParams({
+      select:'sku,variant_name,image_url',status:'eq.Published',or:`(sku.eq.${group},variant_of.eq.${group})`,order:'variant_name.asc,sku.asc'
+    }));
+    return {product,options};
   }
   if (route === 'categories') return { categories: await database(env,'categories?select=id,name,icon,color,sort_order,version&order=sort_order.asc,id.asc&published=eq.true') };
   const [homepage, delivery] = await Promise.all([

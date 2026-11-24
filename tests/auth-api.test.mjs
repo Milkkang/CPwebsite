@@ -82,6 +82,29 @@ test('database identity controls admin status; recovery session cannot read memb
  });
 });
 
+test('only admins can create a product variant and a duplicate SKU gets a specific error',async()=>{
+ const cookie='__Host-cvm-session='+'a'.repeat(64);
+ const path='/api/admin/products';
+ const data={sku:'SOAP-500',variantOf:'SOAP-250',version:0,fields:{variant_name:'500g'},stock:7};
+ let isAdmin=false,writes=0;
+ await mocked(async(url,options)=>{
+  if(url.includes('resolve_web_session'))return Response.json({account,isAdmin});
+  assert.match(url,/\/rpc\/admin_add_product_variant$/);
+  assert.deepEqual(JSON.parse(options.body),{p_actor:userId,p_parent_sku:data.variantOf,p_sku:data.sku,p_fields:data.fields,p_stock:7});
+  writes++;
+  return writes===1?Response.json({sku:data.sku,variant_of:data.variantOf}):Response.json({code:'40001'},{status:409});
+ },async()=>{
+  assert.equal((await run(path,data,{cookie})).status,403);
+  isAdmin=true;
+  assert.equal((await run(path,{...data,version:1},{cookie})).status,400);
+  assert.equal((await run(path,data,{cookie})).status,201);
+  const duplicate=await run(path,data,{cookie});
+  assert.equal(duplicate.status,409);
+  assert.equal((await duplicate.json()).error.code,'SKU_TAKEN');
+  assert.equal(writes,2);
+ });
+});
+
 test('admin coupon deletion uses a versioned soft delete and filters deleted coupons',async()=>{
  const cookie='__Host-cvm-session='+'a'.repeat(64);
  const payload={action:'deleteCoupon',code:'PROMO-10',version:2};
