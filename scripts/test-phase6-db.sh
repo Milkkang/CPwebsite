@@ -36,6 +36,34 @@ cmp -s "$PG_TEST_DIR/annual-1.txt" "$PG_TEST_DIR/annual-2.txt"
 "${PSQL[@]}" -f tests/membership-database-acceptance.sql >/dev/null
 "${PSQL[@]}" -f tests/member-campaign-database-acceptance.sql >/dev/null
 "${PSQL[@]}" -f tests/membership-points-acceptance.sql >/dev/null
+"${PSQL[@]}" -f tests/order-refunds-database-acceptance.sql >/dev/null
+# Distinct refund requests race for one slot. Concurrent success delivery is idempotent.
+"${PSQL[@]}" -f tests/order-refund-race-fixture.sql >/dev/null
+REFUND_ACTOR=6e5ee724-c805-4f65-a051-20de63f3c201
+REFUND_ORDER=6e5ee724-c805-4f65-a051-20de63f3c203
+for refund_index in 1 2; do
+  REFUND_REQUEST="6e5ee724-c805-4f65-a051-20de63f3c21$refund_index"
+  REFUND_SQL="set role service_role; select public.prepare_order_refund('$REFUND_ACTOR','$REFUND_ORDER',1,'$REFUND_REQUEST',true,false,jsonb_build_array(jsonb_build_object('sku','REFUND-RACE','quantity',1)))->>'id';"
+  "${PSQL[@]}" -Atc "$REFUND_SQL" > "$PG_TEST_DIR/refund-$refund_index.txt" 2>&1 &
+  if [ "$refund_index" = 1 ]; then refund_pid_first=$!; else refund_pid_second=$!; fi
+done
+refund_first_status=0
+refund_second_status=0
+wait "$refund_pid_first" || refund_first_status=$?
+wait "$refund_pid_second" || refund_second_status=$?
+test "$refund_first_status:$refund_second_status" = '0:1' || test "$refund_first_status:$refund_second_status" = '1:0'
+rg -q 'REFUND_IN_PROGRESS' "$PG_TEST_DIR/refund-1.txt" "$PG_TEST_DIR/refund-2.txt"
+REFUND_REQUEST=$(rg --no-filename '^6e5ee724-c805-4f65-a051-20de63f3c21[12]$' "$PG_TEST_DIR/refund-1.txt" "$PG_TEST_DIR/refund-2.txt")
+REFUND_SQL="set role service_role; select public.resolve_order_refund('$REFUND_ACTOR','$REFUND_ORDER','$REFUND_REQUEST',false,'re_refund_race','succeeded');"
+"${PSQL[@]}" -Atc "$REFUND_SQL" > "$PG_TEST_DIR/resolve-refund-1.txt" &
+refund_pid_first=$!
+"${PSQL[@]}" -Atc "$REFUND_SQL" > "$PG_TEST_DIR/resolve-refund-2.txt" &
+refund_pid_second=$!
+wait "$refund_pid_first"
+wait "$refund_pid_second"
+test "$("${PSQL[@]}" -Atc "select refunded_quantity from public.order_items where order_id='$REFUND_ORDER'")" = 1
+test "$("${PSQL[@]}" -Atc "select stock from public.products where id='REFUND-RACE'")" = 11
+test "$("${PSQL[@]}" -Atc "select count(*) from public.inventory_movements where source_key='refund:$REFUND_REQUEST:REFUND-RACE'")" = 1
 "${PSQL[@]}" <<'SQL' >/dev/null
 insert into auth.users(id,email,email_confirmed_at)
 values('f4655930-6dcc-406b-8cc7-c3e898d24101','welcome-race@example.invalid',now()-interval '1 day');

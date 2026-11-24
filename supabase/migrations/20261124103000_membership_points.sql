@@ -54,7 +54,9 @@ create table private.membership_point_earnings (
  original_points integer not null check (original_points>=0),
  remaining_points integer not null check (remaining_points between 0 and original_points),
  multiplier integer not null check (multiplier>0),
- credited_at timestamptz
+ credited_lot_id bigint unique references private.membership_point_lots(id),
+ credited_at timestamptz,
+ check (credited_lot_id is null or credited_at is not null)
 );
 create index membership_pending_points_buyer_idx on private.membership_point_earnings(user_id) where credited_at is null;
 
@@ -108,14 +110,16 @@ end $$;
 
 -- A hold consumes spendable balance while the order is pending. Failed/expired
 -- orders release it without changing the lot or extending its original expiry.
-create function private.membership_spendable_lots(p_user uuid)
+-- Refunds may target one originating lot even after its unused points expire.
+create function private.membership_unheld_lots(p_user uuid,p_original_lot bigint default null)
 returns table(id bigint,expires_at timestamptz,points integer) language sql stable set search_path='' as $$
  select l.id,l.expires_at,(l.remaining-coalesce((
   select sum(h.points) from private.membership_point_holds h
   join public.orders o on o.id=h.order_id where h.lot_id=l.id and o.payment_status='pending'
  ),0))::integer
  from private.membership_point_lots l
- where l.user_id=p_user and l.remaining>0 and l.expires_at>now()
+ where l.user_id=p_user and l.remaining>0
+  and (l.id=p_original_lot or (p_original_lot is null and l.expires_at>now()))
 $$;
 
 create function private.membership_points_summary(p_user uuid,p_audit boolean)
@@ -124,7 +128,7 @@ returns jsonb language sql stable set search_path='' as $$
   select coalesce(sum(points),0) available,
    coalesce(sum(points) filter(where expires_at<=now()+interval '30 days'),0) expiring,
    min(expires_at) filter(where points>0 and expires_at<=now()+interval '30 days') next_expiry
-  from private.membership_spendable_lots(p_user)
+  from private.membership_unheld_lots(p_user)
  ), pending as (
   select coalesce(sum(remaining_points),0) as points from private.membership_point_earnings
   where user_id=p_user and credited_at is null
@@ -167,7 +171,7 @@ create function private.take_membership_points(p_user uuid,p_points integer,p_or
 returns integer language plpgsql set search_path='' as $$
 declare lot record; taken integer:=0; debit integer;
 begin
- for lot in select * from private.membership_spendable_lots(p_user) where points>0 order by expires_at,id
+ for lot in select * from private.membership_unheld_lots(p_user) where points>0 order by expires_at,id
  loop
   debit:=least(p_points-taken,lot.points);
   exit when debit=0;
@@ -254,7 +258,7 @@ begin
  end if;
  if private.member_points_eligible(p_user,p_launch,p_live) then
   select least(coalesce(sum(points),0),greatest(0,(subtotal-discount)/10),greatest(0,total-50))
-  into allowed from private.membership_spendable_lots(p_user);
+  into allowed from private.membership_unheld_lots(p_user);
   if allowed<100 then allowed:=0; end if;
  elsif p_points>0 then
   raise exception using errcode='PT409',message='POINTS_UNAVAILABLE';
@@ -356,7 +360,9 @@ returns integer language sql stable set search_path='' as $$ select 100 $$;
 
 create function private.resolve_order_membership_points()
 returns trigger language plpgsql security definer set search_path='' as $$
-declare earning private.membership_point_earnings; rate integer; earned integer; applied integer; expiry timestamptz;
+declare
+ earning private.membership_point_earnings;
+ rate integer; earned integer; applied integer; expiry timestamptz; credited_lot bigint;
 begin
  if old.payment_status='pending' and new.payment_status in ('failed','expired') then
   if new.member_points_redeemed>0 then
@@ -397,7 +403,8 @@ begin
   if earned>0 then
    expiry:=now()+interval '12 months';
    insert into private.membership_point_lots(user_id,issued,remaining,expires_at)
-   values(new.user_id,earned,earned,expiry);
+   values(new.user_id,earned,earned,expiry) returning id into credited_lot;
+   update private.membership_point_earnings set credited_lot_id=credited_lot where order_id=new.id;
    insert into private.membership_point_ledger(source,user_id,order_id,kind,points,expires_at)
    values('credit/'||new.id,new.user_id,new.id,'credited',earned,expiry);
   end if;
@@ -418,7 +425,7 @@ create function private.apply_membership_points_refund(p_order uuid,p_operation 
 returns void language plpgsql set search_path='' as $$
 declare
  buying_order public.orders; earning private.membership_point_earnings; prior private.membership_point_refunds;
- restored record; debited integer;
+ restored record; debited integer:=0;
 begin
  select * into strict buying_order from public.orders where id=p_order for update;
  if not buying_order.member_points_eligible then return; end if;
@@ -466,8 +473,19 @@ begin
  if p_earned>0 then
   update private.membership_point_earnings set remaining_points=remaining_points-p_earned where order_id=p_order;
   if earning.credited_at is not null then
-   debited:=private.take_membership_points(buying_order.user_id,p_earned,null);
-   update private.membership_point_accounts set debt=debt+p_earned-debited where user_id=buying_order.user_id;
+   -- Unused points from this earning cover the clawback even after expiry.
+   -- Points held by another checkout stay reserved until that order resolves.
+   if earning.credited_lot_id is not null then
+    select coalesce((
+     select least(p_earned,points) from private.membership_unheld_lots(buying_order.user_id,earning.credited_lot_id)
+    ),0) into debited;
+    update private.membership_point_lots set remaining=remaining-debited
+    where id=earning.credited_lot_id and debited>0;
+   end if;
+   if debited<p_earned then
+    debited:=debited+private.take_membership_points(buying_order.user_id,p_earned-debited,null);
+    update private.membership_point_accounts set debt=debt+p_earned-debited where user_id=buying_order.user_id;
+   end if;
   end if;
   insert into private.membership_point_ledger(source,user_id,order_id,kind,points)
   values('clawback/'||p_operation,buying_order.user_id,p_order,'clawed_back',-p_earned);
@@ -519,7 +537,7 @@ begin
 end $$;
 
 revoke all on function private.member_points_eligible(uuid,timestamptz,boolean),
- private.lock_membership_point_account(uuid),private.membership_spendable_lots(uuid),
+ private.lock_membership_point_account(uuid),private.membership_unheld_lots(uuid,bigint),
  private.membership_points_summary(uuid,boolean),private.take_membership_points(uuid,integer,uuid),
  private.quote_points_coupon(uuid,timestamptz,boolean,text,text),
  private.apply_points_quote(uuid,timestamptz,boolean,integer,jsonb),

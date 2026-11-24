@@ -130,11 +130,11 @@ function listPagination(path,params,paging,total,noun){
   (page<pages?pageLink(page+1,'Next'):'<span class="btn outline small" aria-disabled="true">Next</span>')+'</div></nav>';
 }
 const orderStages=[['to-ship','To Ship'],['Shipped','Shipped'],['Delivered','Completed'],['Cancelled','Cancelled'],['Refunded','Refund']];
-export const canShipOrder=order=>order.status==='Processing'&&order.paymentStatus==='paid';
-export const canDeliverOrder=order=>order.status==='Shipped'&&order.paymentStatus==='paid';
+export const canShipOrder=order=>order.status==='Processing'&&order.paymentStatus==='paid'&&!order.pendingRefund;
+export const canDeliverOrder=order=>order.status==='Shipped'&&order.paymentStatus==='paid'&&!order.pendingRefund;
 function orderStage(order){
  if(order.paymentStatus==='refunded')return 'Refunded';
- return canShipOrder(order)?'to-ship':order.status;
+ return order.status==='Processing'&&order.paymentStatus==='paid'?'to-ship':order.status;
 }
 function ordersPage(params){
  const q=params.get('q')??'',status=params.get('status')??'';
@@ -311,21 +311,46 @@ function ordersTable(rows,filters,eligible) {
     (eligible?'<td>'+(o.backendId&&eligible(o)?'<input type="checkbox" data-select-order value="'+e(o.backendId)+'" aria-label="Select '+e(o.id)+'">':'')+'</td>':'')+
     '<td><b>'+e(o.id)+'</b></td><td>'+e(o.name)+'</td><td>'+orderItemsPreview(o.items)+'</td><td>'+e(o.date)+'</td><td>'+badge(o.paymentStatus==='refunded'?'Refunded':o.status)+'</td><td>'+cash(o.totals.total)+'</td><td>'+link(href('/admin/orders/'+o.id,filters),'Open ↗','text-link')+'</td></tr>').join(''));
 }
+function orderOperations(order){
+  const action=(name,label)=>'<button type="button" class="btn outline" data-order-action="'+name+
+    '" data-order-id="'+e(order.id)+'">'+label+'</button>';
+  const pending=order.pendingRefund;
+  if(pending){
+    const items=pending.items?.map(row=>'<li>'+e(order.items.find(item=>item.sku===row.sku)?.name??row.sku)+' × '+e(row.quantity)+'</li>').join('');
+    return '<section class="panel form-stack"><h2>Refund pending</h2><p>'+cash(pending.amount)+' · '+(pending.restock?'Return items to stock':'Keep current stock')+'</p>'+
+      (items?'<ul>'+items+'</ul>':'<p>Full refund and order closure</p>')+action('retry_refund','Retry refund')+'</section>';
+  }
+  if(!['pending','paid'].includes(order.paymentStatus))return '';
+  if(order.paymentStatus==='pending')
+    return '<section class="panel form-stack"><h2>Order operations</h2>'+action('cancel','Cancel unpaid order')+'</section>';
+  const quantities=order.items.map(item=>{
+    const remaining=item.qty-(item.refundedQty??0);
+    return remaining>0?'<label>'+e(item.name)+' · '+e(item.option||item.sku)+' ('+remaining+' available to refund)'+
+      '<input type="number" min="0" max="'+remaining+'" step="1" value="0" data-refund-sku="'+e(item.sku)+'"></label>':'';
+  }).join('');
+  return '<section class="panel form-stack" id="refund-options"><h2>Refunds</h2>'+
+    (quantities?'<p>Enter the quantities to refund. Item refunds exclude delivery fees.</p>'+quantities:'')+
+    '<label class="check-label"><input type="checkbox" id="refund-restock"'+checked(order.status==='Processing')+'> Return items to stock (confirm items are available)</label>'+
+    '<div class="button-row">'+(quantities?action('refund_items','Refund selected items'):'')+
+    action('refund','Refund remaining payment and close order')+'</div></section>';
+}
+
 function orderEditor(id,params) {
   const o=state.adminOrders.find(o=>o.id===id);
   const {origin,...filters}=Object.fromEntries(params);
   const back=href(origin==='revenue'?'/admin/revenue':origin==='orders'?'/admin/orders':'/admin',filters);
   if(!o) return empty('Order not found','Return to the order list.',link(back,'View orders','btn primary'));
   const emailJobs=o.emailJobs??[];
+  const canEdit=o.paymentStatus==='paid'&&o.status!=='Cancelled'&&!o.pendingRefund;
   const emailPanel='<section class="panel"><h2>Transactional email</h2>'+(o.livePayment?'':'<p class="subtle">Only approved recipients can receive simulated order emails.</p>')+''+
     (emailJobs.length?'<div class="table-wrap"><table><thead><tr><th>Type</th><th>Status</th><th>Recipient</th><th>Attempts</th><th></th></tr></thead><tbody>'+emailJobs.map(job=>
       '<tr><td>'+e((job.kind==='test_refund'?'refund':job.kind.replaceAll('_',' ')))+'</td><td>'+badge(job.status)+'</td><td>'+e(job.recipient)+'</td><td>'+e(job.attempts)+'</td><td>'+(['failed','bounced'].includes(job.status)?'<button type="button" class="btn small outline" data-resend-email="'+e(job.id)+'">Resend</button>':'—')+'</td></tr>').join('')+'</tbody></table></div>':'<p>No email task has been queued for this order.</p>')+'</section>';
   return link(back,origin==='revenue'?'← Revenue order history':origin==='orders'?'← Orders':'← Overview orders','text-link')+heading(e(o.id),(o.livePayment?'':'Simulated payment · ')+e(o.date))+'<div class="two-col">'+orderDisplay(o)+
     '<div class="form-stack"><section class="panel"><h2>Delivery address</h2>'+(o.postal?'<p class="address-text">'+e(o.deliveryName||o.name)+'<br>'+e(o.address)+'<br>Singapore '+e(o.postal)+'</p>':'<p>Delivery details unavailable.</p>')+'<p>'+e(o.email)+'</p></section>'+
-    '<form class="panel form-stack" id="order-editor" data-order="'+e(id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>'+opts(o.status==='Processing'?['Processing','Shipped']:o.status==='Shipped'?['Shipped','Delivered']:[o.status],o.status)+'</select></label>'+
-    field('Courier tracking number','tracking',o.tracking,'maxlength="50" '+(o.status==='Cancelled'?'readonly':''))+
-    '<div class="button-row">'+(o.status==='Processing'&&o.paymentStatus==='paid'?'<button type="submit" class="btn primary" name="ship-item">Ship Item</button>':'')+
-    '<button type="submit" class="btn '+(o.status==='Processing'?'outline':'primary')+'" '+(o.paymentStatus!=='paid'||o.status==='Cancelled'?'disabled':'')+'>Save fulfilment</button></div></form>'+(['pending','paid'].includes(o.paymentStatus)?'<section class="panel form-stack"><h2>Order operations</h2><p>'+(o.livePayment?'A completed refund returns the payment and closes the order.':'This order involved no payment. A completed refund closes the order.')+'</p><label class="check-label"><input type="checkbox" id="refund-restock"'+checked(o.status==='Processing')+'> Return items to stock (confirm items are available)</label><button type="button" class="btn outline" data-order-action="'+e(o.paymentStatus==='pending'?'cancel':'refund')+'" data-order-id="'+e(o.id)+'">'+(o.paymentStatus==='pending'?'Cancel unpaid order':'Refund payment')+'</button></section>':'')+emailPanel+'</div></div>';
+    '<form class="panel form-stack" id="order-editor" data-order="'+e(id)+'"><h2>Fulfilment</h2><label>Status<select name="status" '+(!canEdit?'disabled':'')+'>'+opts(o.status==='Processing'?['Processing','Shipped']:o.status==='Shipped'?['Shipped','Delivered']:[o.status],o.status)+'</select></label>'+
+    field('Courier tracking number','tracking',o.tracking,'maxlength="50" '+(!canEdit?'readonly':''))+
+    '<div class="button-row">'+(canShipOrder(o)?'<button type="submit" class="btn primary" name="ship-item">Ship Item</button>':'')+
+    '<button type="submit" class="btn '+(o.status==='Processing'?'outline':'primary')+'" '+(!canEdit?'disabled':'')+'>Save fulfilment</button></div></form>'+orderOperations(o)+emailPanel+'</div></div>';
 }
 function couponPage() {
   return heading('Coupons','Create and manage codes for the storefront.','<button class="btn primary" data-edit-coupon="">Add coupon</button>')+

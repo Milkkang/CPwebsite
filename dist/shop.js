@@ -47,7 +47,7 @@ export function productLabel(p, content, variant) {
 export function orderItemLabel(item,showRating=false) {
   const p=findProduct(item.productId)??{name:item.name};
   const v=p.variants?.find(v=>v.sku===item.sku);
-  return productLabel(p,'<b>'+e(item.name)+'</b><small>'+e(item.option)+' × '+item.qty+'</small>'+(showRating&&item.review?'<small>Rated '+e(item.review.rating)+'/5</small>':''),v);
+  return productLabel(p,'<b>'+e(item.name)+'</b><small>'+e(item.option)+' × '+item.qty+'</small>'+(item.refundedQty?'<small>Refunded quantity '+e(item.refundedQty)+'</small>':'')+(showRating&&item.review?'<small>Rated '+e(item.review.rating)+'/5</small>':''),v);
 }
 export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="item-previews">'+items.map(item=>'<li>'+orderItemLabel(item,showRating)+'</li>').join('')+'</ul>';
 const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
@@ -375,14 +375,15 @@ export function orders(params=new URLSearchParams()) {
   return nav+(!purchases.length?empty('No orders yet','Orders you place in this browser appear here.',go('/shop','Browse products','btn primary')):
     '<div class="panel table-wrap"><table><thead><tr><th>Order</th><th>Products</th><th>Date</th><th>Status</th><th>Total</th><th></th></tr></thead><tbody>'+purchases.map(o=>'<tr><td>'+e(o.id)+'</td><td>'+orderItemsPreview(o.items,{showRating:true})+'</td><td>'+e(o.date)+'</td><td>'+buyerOrderBadge(o)+'</td><td>'+cash(o.totals.total)+'</td><td><div class="purchase-history-actions">'+link(href('/orders',{id:o.id}),'View order ↗','text-link')+repurchaseButton(o)+'</div></td></tr>').join('')+'</tbody></table></div>');
 }
-const buyerOrderBadge=(order,label)=>order.paymentStatus==='pending'?badge('Pending','Payment pending'):badge(order.status,label);
+const buyerOrderBadge=(order,label)=>order.paymentStatus==='pending'?badge('Pending','Payment pending'):order.paymentStatus==='refunded'?badge('Refunded'):badge(order.status,label);
 export function orderDisplay(o,{buyerTracking=false}={}) {
   if(!o) return '';
   const stage=buyerTracking?trackingStages.find(item=>item.status===o.status):null;
   const tracking=o.tracking||(buyerTracking&&o.status!=='Processing'?'Not available':'Awaiting shipment');
   return '<div class="panel order-display"><div class="section-title"><div><h2>'+e(o.id)+'</h2><p class="subtle">'+e(o.date)+'</p></div>'+buyerOrderBadge(o,buyerTracking&&o.status==='Delivered'?'Received':stage?.label)+'</div>'+
     (o.status==='Cancelled'||o.paymentStatus==='pending'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
-    '<p class="subtle">'+(o.livePayment?'':'Simulated order · No charge. ')+'Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
+    '<p class="subtle">'+(o.livePayment?'':'Simulated order · No charge. ')+'Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p>'+
+    (o.refundedCents||o.items.some(item=>item.refundedQty)?'<p class="order-total">Refunded <strong>'+cash(o.refundedCents??0)+'</strong></p>':'')+'</div>';
 }
 export function confirmation(params,result) {
   const id=result?.orderNumber??(params.get('id')??'').trim().toUpperCase();

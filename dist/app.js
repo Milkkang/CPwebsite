@@ -17,6 +17,7 @@ let renderedAdminGate=null;
 let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let storefrontDeliveryLoaded=false;
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
+const submittingOrderActions=new Set();
 let campaignAdmin;
 async function loadAdminCampaigns(owner){
  const check={owner};
@@ -96,8 +97,9 @@ function trackTraffic(event){
   .catch(()=>{}).finally(()=>trafficPending.delete(key));
 }
 function mapOrder(row){return {id:row.number,backendId:row.id,version:row.version,createdAt:row.createdAt,date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(row.createdAt)),email:row.email??auth.account?.email??'',name:row.name??auth.account?.name??'',deliveryName:row.address?.name??'',address:row.address?.line??'',postal:row.address?.postal??'',status:row.fulfilmentStatus,tracking:row.tracking,
- items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty})),
- totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt,livePayment:row.livePayment===true};}
+ items:row.items.map(item=>({productId:item.sku,sku:item.sku,name:item.name,option:item.option,price:item.price,qty:item.qty,refundedQty:item.refundedQty??0})),
+ totals:{subtotal:row.subtotal,shipping:row.shipping,discount:row.discount,total:row.total},paymentStatus:row.paymentStatus,paidAt:row.paidAt,livePayment:row.livePayment===true,
+ refundedCents:row.refundedCents??0,refundedMerchandiseCents:row.refundedMerchandiseCents??0,pendingRefund:row.pendingRefund??null};}
 async function loadOrders(){
  const owner=auth.account?.id;
  if(!owner||auth.recoveryOnly||ordersRequest?.owner===owner)return;
@@ -807,12 +809,43 @@ document.addEventListener('click', async event=>{
   }
   else if('orderAction' in data) {
     const order=state.adminOrders.find(row=>row.id===data.orderId);
-    if(!order?.backendId)return;
-    const restock=Boolean(document.getElementById('refund-restock')?.checked);
-    if(!window.confirm(data.orderAction==='refund'?'Refund this '+(order.livePayment?'':'simulated ')+'payment and close the order'+(restock?' with stock returned?':' without returning stock?'):'Cancel this unpaid order?'))return;
+    if(!order?.backendId||submittingOrderActions.has(order.backendId))return;
+    const pending=data.orderAction==='retry_refund'?order.pendingRefund:null;
+    const action=pending?(pending.items?'refund_items':'refund'):data.orderAction;
+    const restock=pending?.restock??Boolean(document.getElementById('refund-restock')?.checked);
+    let items=pending?.items;
+    if(action==='refund_items'&&!pending){
+      const quantities=[...document.querySelectorAll('#refund-options [data-refund-sku]')];
+      if(quantities.some(input=>!input.reportValidity()))return;
+      items=quantities.filter(input=>Number(input.value)>0).map(input=>({sku:input.dataset.refundSku,quantity:Number(input.value)}));
+      if(!items.length){message('Enter a quantity for at least one item.');return;}
+    }
+    const prompt=action==='cancel'?'Cancel this unpaid order?':pending?'Retry this pending refund?':
+      (action==='refund_items'?'Refund the selected items':'Refund the remaining payment and close the order')+
+      (restock?' with stock returned?':' without returning stock?');
+    if(!window.confirm(prompt))return;
+    const payload={orderId:order.backendId,version:order.version,action,restock};
+    if(action!=='cancel')payload.requestId=pending?pending.requestId:crypto.randomUUID();
+    if(action==='refund_items')payload.items=items;
+    const owner=auth.account?.id;
+    submittingOrderActions.add(order.backendId);
     button.disabled=true;
-    try{await authRequest('/api/admin/order-actions',{orderId:order.backendId,version:order.version,action:data.orderAction,restock});adminProductsLoaded=false;await loadAdminProducts();message('Order updated.');}
-    catch(error){message(error.message);button.disabled=false;}
+    try{
+      const result=await authRequest('/api/admin/order-actions',payload);
+      if(auth.account?.id!==owner||!auth.isAdmin)return;
+      adminProductsLoaded=false;
+      await loadAdminProducts();
+      if(action!=='cancel')loadOrders();
+      const refund=result.refund;
+      message(refund?'Refund recorded. '+(refund.amount>0?'S$'+(refund.amount/100).toFixed(2)+' refunded.':'No cash refund required.')+
+        (refund.pointsRestored?' '+refund.pointsRestored+' points restored.':'')+
+        (refund.pointsClawedBack?' '+refund.pointsClawedBack+' points deducted.':''):'Order updated.');
+    }catch(error){
+      if(auth.account?.id!==owner||!auth.isAdmin)return;
+      adminProductsLoaded=false;
+      await loadAdminProducts();
+      message(error.message);button.disabled=false;
+    }finally{submittingOrderActions.delete(order.backendId);}
   } else if('deleteCoupon' in data) {
     const code=data.deleteCoupon,version=couponVersions.get(code);
     if(button.disabled||!version||!window.confirm('Delete coupon '+code+'? The code will no longer work for new orders.'))return;

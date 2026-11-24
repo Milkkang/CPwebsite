@@ -3,7 +3,7 @@ begin;
 do $$
 declare
  buyer uuid:=gen_random_uuid(); other_buyer uuid:=gen_random_uuid(); admin uuid:=gen_random_uuid();
- address uuid:=gen_random_uuid(); checkout_id uuid; campaign uuid;
+ address uuid:=gen_random_uuid(); checkout_id uuid; campaign uuid; credited_order uuid; expired_credit_order uuid;
  launch timestamptz:=now()-interval '1 day'; request uuid:=gen_random_uuid(); reversal uuid:=gen_random_uuid(); result jsonb;
 begin
  insert into auth.users(id,email,email_confirmed_at) values
@@ -73,6 +73,7 @@ begin
  end if;
  result:=public.create_points_order(buyer,address,launch,true,campaign::text,null,200,4500);
  checkout_id:=(result->>'id')::uuid;
+ credited_order:=checkout_id;
  perform public.attach_test_checkout(buyer,checkout_id,'cs_live_points_paid');
  perform public.apply_test_payment_event('evt_points_paid','checkout.session.completed',true,
   checkout_id,'cs_live_points_paid','pi_points_paid',4500,'sgd');
@@ -91,11 +92,28 @@ begin
  if result->>'available' is distinct from '95' or result->>'pending' is distinct from '0' then
   raise exception 'delivery should credit the pending points once: %',result;
  end if;
- perform private.apply_membership_points_refund(checkout_id,reversal,18,'[{"offset":0,"points":80}]');
- perform private.apply_membership_points_refund(checkout_id,reversal,18,'[{"offset":0,"points":80}]');
+ result:=public.prepare_order_refund(admin,checkout_id,(select version from public.orders where id=checkout_id),
+  reversal,true,true,'[{"sku":"POINTS-A","quantity":1}]');
+ if result->>'amount' is distinct from '1800' or result->>'paidAmount' is distinct from '4500' or
+    result->>'earned' is distinct from '18' or result->>'restored' is distinct from '80' then
+  raise exception 'refund must use the original cash and points allocation: %',result;
+ end if;
+ if (select stock from public.products where sku='POINTS-A')<>9 or
+    (select refunded_cents from public.orders where id=checkout_id)<>0 then
+  raise exception 'preparing a refund must not restock or record it as completed';
+ end if;
+ perform public.resolve_order_refund(admin,checkout_id,reversal,true,'re_points_fixture','succeeded');
+ perform public.resolve_order_refund(admin,checkout_id,reversal,true,'re_points_fixture','succeeded');
+ if (select stock from public.products where sku='POINTS-A')<>10 or
+    (select stock from public.products where sku='POINTS-B')<>9 or
+    (select refunded_quantity from public.order_items where order_id=checkout_id and sku='POINTS-A')<>1 or
+    not exists(select 1 from public.orders where id=checkout_id and refunded_cents=1800 and
+      refunded_merchandise_cents=1800 and payment_status='paid' and fulfilment_status='Delivered') then
+  raise exception 'partial refund, inventory or order state is incorrect';
+ end if;
  result:=public.read_member_points(buyer);
- if result->>'available' is distinct from '157' or result->>'expiring' is distinct from '62' then
-  raise exception 'refund must restore the oldest lot with its original expiry and claw back once: %',result;
+ if result->>'available' is distinct from '157' or result->>'expiring' is distinct from '80' then
+  raise exception 'refund must preserve restored points and revoke the points originally credited by that order: %',result;
  end if;
  insert into public.buyer_cart_items(user_id,sku,quantity) values(buyer,'POINTS-A',1),(buyer,'POINTS-B',1);
  result:=public.quote_points_checkout(buyer,launch,true,null,null,150);
@@ -122,6 +140,61 @@ begin
  result:=public.read_member_points(buyer);
  if result->>'available' is distinct from '157' or result->>'pending' is distinct from '0' then
   raise exception 'sandbox activity affected the formal balance: %',result;
+ end if;
+ -- Bring forward an order's unused earn-lot expiry without changing the other lots.
+ insert into public.buyer_cart_items(user_id,sku,quantity) values(buyer,'POINTS-A',1);
+ result:=public.create_points_order(buyer,address,launch,true,null,null,0,null);
+ expired_credit_order:=(result->>'id')::uuid;
+ perform public.attach_test_checkout(buyer,expired_credit_order,'cs_live_points_unused_credit');
+ perform public.apply_test_payment_event('evt_points_unused_credit','checkout.session.completed',true,
+  expired_credit_order,'cs_live_points_unused_credit','pi_points_unused_credit',2390,'sgd');
+ perform public.admin_update_order(admin,expired_credit_order,(select version from public.orders where id=expired_credit_order),'Shipped','Synthetic');
+ if not public.confirm_test_order_receipt(buyer,expired_credit_order,(select version from public.orders where id=expired_credit_order)) then
+  raise exception 'buyer receipt failed on the unused-earn order';
+ end if;
+ if public.read_member_points(buyer)->>'available' is distinct from '177' then
+  raise exception 'the earned lot should contain 20 unused points before expiry';
+ end if;
+ update private.membership_point_lots set expires_at=now()-interval '1 day' where user_id=buyer and issued=20;
+ perform private.apply_membership_points_refund(expired_credit_order,gen_random_uuid(),20,'[]');
+ result:=public.read_member_points(buyer);
+ if result->>'available' is distinct from '157' or result->>'debt' is distinct from '0' then
+  raise exception 'expired unused earnings must not deduct unrelated points or create debt: %',result;
+ end if;
+ -- The original earn lot is completely held by the next checkout. A second
+ -- return must use newly restored spendable points without raiding that hold.
+ insert into public.buyer_cart_items(user_id,sku,quantity) values(buyer,'POINTS-A',1),(buyer,'POINTS-B',1);
+ result:=public.create_points_order(buyer,address,launch,true,null,null,157,4843);
+ checkout_id:=(result->>'id')::uuid;
+ perform public.attach_test_checkout(buyer,checkout_id,'cs_live_points_next_checkout');
+ reversal:=gen_random_uuid();
+ result:=public.prepare_order_refund(admin,credited_order,(select version from public.orders where id=credited_order),
+  reversal,true,true,null);
+ if result->>'amount' is distinct from '2700' or result->>'earned' is distinct from '27' or
+    result->>'restored' is distinct from '120' then raise exception 'wrong full refund remainder: %',result; end if;
+ perform public.resolve_order_refund(admin,credited_order,reversal,true,'re_points_full_fixture','succeeded');
+ if not exists(select 1 from public.orders where id=credited_order and payment_status='refunded' and
+   fulfilment_status='Cancelled' and refunded_cents=4500 and refunded_merchandise_cents=4500) or
+   exists(select 1 from public.order_items where order_id=credited_order and refunded_quantity<>quantity) or
+   (select count(*) from public.inventory_movements where source_key in
+    ('refund:'||reversal||':POINTS-A','refund:'||reversal||':POINTS-B'))<>1 then
+  raise exception 'full refund after partial did not close the order or restocked twice';
+ end if;
+ result:=public.apply_test_payment_event('evt_points_next_checkout','checkout.session.completed',true,
+  checkout_id,'cs_live_points_next_checkout','pi_points_next_checkout',4843,'sgd');
+ if result->>'outcome' is distinct from 'paid' then raise exception 'points held by the open checkout could not settle'; end if;
+ if public.read_member_points(buyer)->>'available' is distinct from '93' then
+  raise exception 'already-held points or the restored balance was lost';
+ end if;
+ reversal:=gen_random_uuid();
+ result:=public.prepare_order_refund(admin,checkout_id,(select version from public.orders where id=checkout_id),
+  reversal,false,true,'[{"sku":"POINTS-A","quantity":1}]');
+ if result->>'amount' is distinct from '1937' or result->>'earned' is distinct from '19' then
+  raise exception 'wrong original cash or earning for pre-delivery return: %',result;
+ end if;
+ perform public.resolve_order_refund(admin,checkout_id,reversal,true,'re_points_pre_delivery','succeeded');
+ if public.read_member_points(buyer)->>'pending' is distinct from '29' then
+  raise exception 'pre-delivery return must reduce pending points';
  end if;
  if has_function_privilege('authenticated','public.read_member_points(uuid)','EXECUTE') or
     has_function_privilege('anon','public.quote_points_checkout(uuid,timestamptz,boolean,text,text,integer)','EXECUTE') or

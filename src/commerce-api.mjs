@@ -47,7 +47,10 @@ async function stripeRead(env,path){
 function orderShape(row){
  return {id:row.id,number:row.number,version:row.version,paymentStatus:row.payment_status,fulfilmentStatus:row.fulfilment_status,
   tracking:row.tracking_number,subtotal:row.subtotal_cents,shipping:row.shipping_cents,discount:row.discount_cents,total:row.total_cents,
-  createdAt:row.created_at,paidAt:row.paid_at,livePayment:row.live_payment===true,items:(row.items??[]).map(item=>({sku:item.sku,name:item.product_name,option:item.variant_name,image:item.image_url,price:item.unit_cents,qty:item.quantity}))};
+  createdAt:row.created_at,paidAt:row.paid_at,livePayment:row.live_payment===true,
+  refundedCents:row.refunded_cents??0,refundedMerchandiseCents:row.refunded_merchandise_cents??0,
+  items:(row.items??[]).map(item=>({sku:item.sku,name:item.product_name,option:item.variant_name,image:item.image_url,
+   price:item.unit_cents,qty:item.quantity,refundedQty:item.refunded_quantity??0}))};
 }
 async function canUsePreviewCheckout(who,env){
  if(!who.account.verified)return false;
@@ -309,6 +312,92 @@ async function webhook(request,env){
  if(!applied.ok)throw new ApiError(409,'PAYMENT_EVENT_REJECTED','Payment event was rejected.');
  return {status:200,data:{received:true}};
 }
+const refundId=/^re_[A-Za-z0-9_]+$/;
+const failedRefund=status=>status==='failed'||status==='canceled';
+const unverifiedRefund=()=>new ApiError(409,'REFUND_UNVERIFIED','The refund could not be verified. Retry the same operation.');
+async function verifiedStripeRefund(env,orderId,op,live){
+ if(!/^pi_[A-Za-z0-9_]+$/.test(op.intent??'')||op.currency!=='sgd')throw unverifiedRefund();
+ const intent=await stripeRead(env,'payment_intents/'+encodeURIComponent(op.intent));
+ if(intent.id!==op.intent||intent.livemode!==live||intent.currency!==op.currency||intent.status!=='succeeded'||
+    intent.amount!==op.paidAmount||intent.amount_received!==op.paidAmount||intent.metadata?.order_id!==orderId||
+    !/^ch_[A-Za-z0-9_]+$/.test(intent.latest_charge??''))
+  throw new ApiError(409,'PAYMENT_UNVERIFIED','The captured payment could not be verified.');
+
+ // Stripe authenticates requests in the same mode as the verified PaymentIntent.
+ // Refund objects need not include livemode. Their charge and intent must match.
+ const linked=refund=>refund?.object==='refund'&&refundId.test(refund.id??'')&&
+  (refund.livemode===undefined||refund.livemode===live)&&refund.payment_intent===op.intent&&
+  refund.charge===intent.latest_charge&&refund.currency===op.currency&&Number.isSafeInteger(refund.amount)&&refund.amount>0;
+ const own=refund=>refund.metadata?.order_id===orderId&&(op.legacy?
+  refund.metadata?.operation_id===undefined:refund.metadata?.operation_id===op.id);
+ const params=new URLSearchParams({payment_intent:op.intent,limit:'100'});
+ let prior,previousCash=0;
+ const seen=new Set();
+ for(;;){
+  const page=await stripeRead(env,'refunds?'+params);
+  if(!Array.isArray(page.data)||typeof page.has_more!=='boolean')throw unverifiedRefund();
+  for(const refund of page.data){
+   if(!linked(refund)||seen.has(refund.id))throw unverifiedRefund();
+   seen.add(refund.id);
+   if(own(refund)){
+    if(prior)throw unverifiedRefund();
+    prior=refund;
+   }else if(refund.status==='succeeded')previousCash+=refund.amount;
+   else if(!failedRefund(refund.status))throw unverifiedRefund();
+  }
+  if(!page.has_more)break;
+  if(!page.data.length)throw unverifiedRefund();
+  params.set('starting_after',page.data.at(-1).id);
+ }
+ if(previousCash!==op.refunded)throw unverifiedRefund();
+ const form=new URLSearchParams({payment_intent:op.intent,amount:String(op.amount),'metadata[order_id]':orderId});
+ if(!op.legacy)form.set('metadata[operation_id]',op.id);
+ const refund=prior??await stripe(env,'refunds',form,'refund/'+(op.legacy?orderId:op.id));
+ if(!linked(refund)||!own(refund)||refund.amount!==op.amount)throw unverifiedRefund();
+ return refund;
+}
+async function refundOrder(env,actor,data,live){
+ const partial=data.action==='refund_items';
+ const items=partial?data.items:null,requestId=data.requestId??null;
+ if(requestId!==null&&(typeof requestId!=='string'||!orderUuid.test(requestId))||
+    !partial&&data.items!=null||
+    partial&&(requestId===null||!Array.isArray(items)||items.length<1||items.length>200||
+      items.some(item=>typeof item?.sku!=='string'||!item.sku||item.sku.length>200||
+       !Number.isInteger(item.quantity)||item.quantity<1||item.quantity>2147483647)||
+      new Set(items.map(item=>item.sku)).size!==items.length))
+  throw new ApiError(400,'INVALID_INPUT','Check the refund items and quantities.');
+ if(!['sandbox','live-pilot','live'].includes(checkoutMode(env)))
+  throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Refunds are temporarily unavailable.');
+ const orderId=data.orderId.toLowerCase();
+ const prepared=await db(env,'rpc/prepare_order_refund',{method:'POST',body:{
+  p_actor:actor,p_order:orderId,p_version:data.version,p_request:requestId,p_restock:data.restock,p_live:live,p_items:items
+ },allowFailure:true});
+ if(!prepared.ok){
+  const code=prepared.data?.message;
+  if(code==='PAYMENT_MODE_MISMATCH')throw new ApiError(409,code,'Payment actions are unavailable for this order in the current checkout mode.');
+  if(code==='REFUND_IN_PROGRESS')throw new ApiError(409,code,'Another refund is in progress. Reload the order and retry that refund.');
+  if(code==='REFUND_REQUEST_CHANGED')throw new ApiError(409,code,'This refund request has changed. Reload the order before retrying.');
+  if(prepared.data?.code==='42501')throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
+  throw new ApiError(409,'ORDER_CHANGED','This order changed or the refund is unavailable. Reload before retrying.');
+ }
+ const op=prepared.data;
+ const terminalFailure=()=>new ApiError(409,'REFUND_FAILED','The payment service failed or cancelled this refund. You can start a new refund.');
+ if(op.aborted)throw terminalFailure();
+ if(!op.completed){
+  if(!orderUuid.test(op.id??'')||!Number.isSafeInteger(op.amount)||op.amount<0||
+     !Number.isSafeInteger(op.paidAmount)||!Number.isSafeInteger(op.refunded)||op.refunded<0||op.refunded+op.amount>op.paidAmount)
+   throw unverifiedRefund();
+  const refund=op.amount>0?await verifiedStripeRefund(env,orderId,op,live):null;
+  if(refund&&refund.status!=='succeeded'&&!failedRefund(refund.status))
+   throw new ApiError(409,'REFUND_PENDING','The payment service is processing this refund. Retry the same refund later.');
+  const finished=await db(env,'rpc/resolve_order_refund',{method:'POST',body:{
+   p_actor:actor,p_order:orderId,p_request:op.id,p_live:live,p_provider:refund?.id??null,p_status:refund?.status??'no_cash'
+  },allowFailure:true});
+  if(!finished.ok||finished.data!==true)throw new ApiError(409,'OPERATION_PENDING','The payment result is available. Retry the same refund to reconcile the order.');
+  if(refund&&failedRefund(refund.status))throw terminalFailure();
+ }
+ return {status:200,data:{ok:true,testMode:!live,refund:{amount:op.amount,pointsRestored:op.restored??0,pointsClawedBack:op.earned??0}}};
+}
 export const commerceRoute=path=>paidMembershipRoute(path)||path==='/api/membership'||path==='/api/checkout/quote'||path==='/api/checkout/session'||path==='/api/checkout/status'||path==='/api/checkout/manage'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/membership/points'||path==='/api/admin/orders'||path==='/api/admin/orders/bulk-ship'||path==='/api/admin/orders/bulk-deliver'||path==='/api/admin/order-actions';
 export async function handleCommerce(request,env){
  const path=new URL(request.url).pathname;
@@ -345,8 +434,12 @@ export async function handleCommerce(request,env){
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
   originGuard(request);
   const who=await identity(request,env);if(!who.isAdmin)throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
-  stripeConfig(env);const live=liveMode(env),data=await bodyJSON(request);
-  if(!safeId(data.orderId)||!Number.isSafeInteger(data.version)||data.version<1||!['cancel','refund'].includes(data.action)||typeof data.restock!=='boolean')throw new ApiError(400,'INVALID_INPUT','Check the order operation.');
+  const live=liveMode(env),data=await bodyJSON(request,64*1024);
+  if(typeof data?.orderId!=='string'||!orderUuid.test(data.orderId)||!Number.isInteger(data.version)||data.version<1||
+     data.version>2147483647||!['cancel','refund','refund_items'].includes(data.action)||typeof data.restock!=='boolean')
+   throw new ApiError(400,'INVALID_INPUT','Check the order operation.');
+  if(data.action!=='cancel')return refundOrder(env,who.account.id,data,live);
+  stripeConfig(env);
   const prepared=await db(env,'rpc/prepare_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_version:data.version,p_action:data.action,p_restock:data.restock,p_live:live},allowFailure:true});
   if(!prepared.ok){
    if(prepared.data?.message==='PAYMENT_MODE_MISMATCH')throw new ApiError(409,'PAYMENT_MODE_MISMATCH','Payment actions are unavailable for this order in the current checkout mode.');
@@ -354,29 +447,13 @@ export async function handleCommerce(request,env){
   }
   const op=prepared.data;
   if(!op.completed){
-   let provider;
-   if(data.action==='refund'){
-    if(!/^pi_[A-Za-z0-9_]+$/.test(op.intent??''))throw new ApiError(409,'INVALID_ORDER','Payment reference is unavailable.');
-    const intent=await stripeRead(env,'payment_intents/'+encodeURIComponent(op.intent));
-    if(intent.livemode!==live||intent.id!==op.intent||intent.currency!==op.currency||intent.amount!==op.amount||intent.metadata?.order_id!==data.orderId)throw new ApiError(409,'PAYMENT_UNVERIFIED','The payment could not be verified.');
-    const existing=await stripeRead(env,'refunds?'+new URLSearchParams({payment_intent:op.intent,limit:'100'}));
-    if(!Array.isArray(existing.data))throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Refunds are unavailable.');
-    const prior=existing.data.filter(refund=>refund.metadata?.order_id===data.orderId);
-    if(prior.length>1)throw new ApiError(409,'REFUND_UNVERIFIED','Refund reconciliation requires administrator review.');
-    const refund=prior[0]??await stripe(env,'refunds',new URLSearchParams({payment_intent:op.intent,amount:String(op.amount),'metadata[order_id]':data.orderId}),'refund/'+data.orderId);
-    if((live&&refund.livemode!==true)||refund.payment_intent!==op.intent||refund.amount!==op.amount||refund.currency!==op.currency||!/^re_/.test(refund.id??''))throw new ApiError(409,'REFUND_UNVERIFIED','The refund could not be verified. Retry this same operation.');
-    if(refund.status!=='succeeded')throw new ApiError(409,'REFUND_PENDING','The refund is not complete. Retry this same operation later.');
-    provider=refund.id;
-   }else{
-    if(!sessionPattern(live).test(op.session??''))throw new ApiError(409,'INVALID_ORDER','Checkout reference is unavailable.');
-    // Retrieve first: an expired session can be retried after a lost response.
-    let session=await stripeRead(env,'checkout/sessions/'+encodeURIComponent(op.session));
-    if(session.status==='open')session=await stripe(env,'checkout/sessions/'+encodeURIComponent(op.session)+'/expire',new URLSearchParams(),'cancel/'+data.orderId);
-    if(session.livemode===live&&session.id===op.session&&session.status==='complete')await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:'checkout_completed'}});
-    if(session.livemode!==live||session.id!==op.session||session.status!=='expired')throw new ApiError(409,'ORDER_CHANGED','Checkout cannot be cancelled. Reconcile its payment first.');
-    provider=session.id;
-   }
-   const finished=await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:provider},allowFailure:true});
+   if(!sessionPattern(live).test(op.session??''))throw new ApiError(409,'INVALID_ORDER','Checkout reference is unavailable.');
+   // Retrieve first: an expired session can be retried after a lost response.
+   let session=await stripeRead(env,'checkout/sessions/'+encodeURIComponent(op.session));
+   if(session.status==='open')session=await stripe(env,'checkout/sessions/'+encodeURIComponent(op.session)+'/expire',new URLSearchParams(),'cancel/'+data.orderId);
+   if(session.livemode===live&&session.id===op.session&&session.status==='complete')await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:'checkout_completed'}});
+   if(session.livemode!==live||session.id!==op.session||session.status!=='expired')throw new ApiError(409,'ORDER_CHANGED','Checkout cannot be cancelled. Reconcile its payment first.');
+   const finished=await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:session.id},allowFailure:true});
    if(!finished.ok||finished.data!==true)throw new ApiError(409,'OPERATION_PENDING','Provider operation recorded. Retry the same action to reconcile the order.');
   }
   return {status:200,data:{ok:true,testMode:!live}};
@@ -417,7 +494,7 @@ export async function handleCommerce(request,env){
    if(!changed.ok)throw new ApiError(changed.data?.code==='40001'?409:400,changed.data?.code==='40001'?'VERSION_CONFLICT':'INVALID_ORDER','This order changed or the fulfilment update is invalid.');
   }
   const rows=await db(env,'rpc/read_admin_orders',{method:'POST',body:{p_actor:who.account.id}});
-  return {status:200,data:{orders:rows.data.map(row=>({...orderShape({...row,number:row.number,items:row.items}),version:row.version,email:row.email,name:row.customer_name,address:{name:row.full_name,line:row.address_line,postal:row.postal_code}}))}};
+  return {status:200,data:{orders:rows.data.map(row=>({...orderShape({...row,number:row.number,items:row.items}),version:row.version,pendingRefund:row.pending_refund??null,email:row.email,name:row.customer_name,address:{name:row.full_name,line:row.address_line,postal:row.postal_code}}))}};
  }
  if(path==='/api/orders/receipt'){
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');originGuard(request);
@@ -429,7 +506,7 @@ export async function handleCommerce(request,env){
  }
  if(path==='/api/orders'){
   if(request.method!=='GET')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
-  const who=await identity(request,env);const rows=await db(env,'orders?'+new URLSearchParams({select:'id,order_number,live_payment,payment_status,fulfilment_status,tracking_number,version,subtotal_cents,shipping_cents,discount_cents,total_cents,created_at,paid_at,order_items(sku,product_name,variant_name,image_url,unit_cents,quantity)',user_id:'eq.'+who.account.id,order:'created_at.desc',limit:'100'}));
+  const who=await identity(request,env);const rows=await db(env,'orders?'+new URLSearchParams({select:'id,order_number,live_payment,payment_status,fulfilment_status,tracking_number,version,subtotal_cents,shipping_cents,discount_cents,total_cents,created_at,paid_at,refunded_cents,refunded_merchandise_cents,order_items(sku,product_name,variant_name,image_url,unit_cents,quantity,refunded_quantity)',user_id:'eq.'+who.account.id,order:'created_at.desc',limit:'100'}));
   return {status:200,data:{orders:rows.data.map(row=>orderShape({...row,number:'CVM-'+row.order_number,items:row.order_items}))}};
  }
  throw new ApiError(404,'NOT_FOUND','API endpoint not found.');
