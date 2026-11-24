@@ -277,7 +277,7 @@ export function updateInlineStatus(id,status) {
   p.status=status;save();
 }
 function variantFields(v={},i=0,p={},allowRemove=true) {
-  return '<fieldset class="variant-fields"><legend>Variant '+(i+1)+'</legend>'+(allowRemove?'<button type="button" class="btn outline small variant-remove" data-remove-variant aria-label="Delete variant '+(i+1)+'">Delete variant</button>':'')+'<input type="hidden" name="oldSku" value="'+e(v.sku??'')+'">'+
+  return '<fieldset class="variant-fields"><legend>'+(allowRemove?'Variant '+(i+1):'Option details')+'</legend>'+(allowRemove?'<button type="button" class="btn outline small variant-remove" data-remove-variant aria-label="Delete variant '+(i+1)+'">Delete variant</button>':'')+'<input type="hidden" name="oldSku" value="'+e(v.sku??'')+'">'+
     field('Name','variantName',v.name??'','required maxlength="60"')+
     field('Variant SKU','variantSku',v.sku??'','required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+"')+
     field('Price (SGD)','variantPrice',v.price===undefined?'':(v.price/100).toFixed(2),'type="number" min="0" max="99999" step="0.01" required')+
@@ -289,19 +289,30 @@ function variantFields(v={},i=0,p={},allowRemove=true) {
 export function productEditor(id,params=new URLSearchParams()) {
   const existing=findProduct(id);
   if(id!=='new'&&!existing) return empty('Product not found','Return to the product list.',go('/admin/products','View products','btn primary'));
-  const p=existing??{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]};
-  const back=href('/admin/products',Object.fromEntries(params));
-  return link(back,'← Products','text-link')+heading(existing?'Edit product':'Add product',existing?e(p.sku):'Enter details and at least one variant.')+
-    '<form id="product-editor" data-id="'+e(existing?.id??'')+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
+  const parentSku=id==='new'?params.get('variantOf'):null;
+  const parent=parentSku?findProduct(parentSku):null;
+  if(parentSku&&!parent)return empty('Product not found','Choose a product before adding a variant.',go('/admin/products','View products','btn primary'));
+  const p=existing??(parent?{...parent,sku:'',status:'Draft',featured:false,variants:[]}:{sku:'',name:'',brand:'',category:'others',status:'Draft',description:'',keywords:'',image:'',original:'',r2:'',variants:[]});
+  const filters=Object.fromEntries(params);delete filters.variantOf;
+  const back=href('/admin/products'+(parent?'/'+parent.sku:''),filters);
+  const backLabel=parent?'Back to product':'Back to products';
+  const group=existing&&(existing.variantOf??existing.sku);
+  const siblings=existing?state.products.filter(row=>row.id!==existing.id&&(row.variantOf??row.sku)===group):[];
+  const addVariant=existing?'<a class="btn outline small" data-add-variant href="'+e(href('/admin/products/new',{...filters,variantOf:existing.sku}))+'">Add variant</a>':'';
+  return link(back,parent?'← Product':'← Products','text-link')+heading(parent?'Add variant':existing?'Edit product':'Add product',existing||parent?e((existing??parent).sku):'Enter the product and listing details.')+
+    '<form id="product-editor" data-id="'+e(existing?.id??'')+'" data-variant-of="'+e(parent?.sku??'')+'" data-back="'+e(back)+'" class="form-stack editor"><section class="panel form-stack"><h2>Product information</h2>'+(existing?productLabel(p,'<b>'+e(p.name)+'</b>'):'')+'<div class="field-grid">'+
     field('Product name','name',p.name,'required maxlength="500"')+field('Brand','brand',p.brand,'required maxlength="70"')+
-    field('Parent SKU','sku',p.sku,'required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+" '+(existing?'readonly':''))+
+    (parent?'':field('Listing SKU','sku',p.sku,'required maxlength="32" pattern="[A-Za-z0-9_&#92;x2D]+" '+(existing?'readonly':'')))+
     '<label>Category<select name="category">'+cats(p.category)+'</select></label><label>Status<select name="status">'+opts(['Draft','Published','Archived'],p.status)+'</select></label>'+
     '<label class="check-label featured-field"><input type="checkbox" name="featured"'+checked(p.featured)+'> Feature on homepage</label></div>'+
     '<label>Description<textarea name="description" rows="3" maxlength="1000">'+e(p.description)+'</textarea></label>'+
     field('Search keywords','keywords',p.keywords,'maxlength="300" placeholder="English names, 中文 keywords, common abbreviations"')+
     field('R2 image URL','image',p.image,'maxlength="350" placeholder="https://…"')+'</section>'+
-    '<section class="panel form-stack"><div class="section-title"><h2>Listing, stock and price</h2></div><p class="subtle">Each SKU is one listing. Enter the same SKU in both fields.</p><div id="variant-fields">'+(p.variants.length?p.variants:[{name:'',sku:'',price:0,stock:0,min:1,image:''}]).slice(0,1).map((v,i)=>variantFields(v,i,p,false)).join('')+'</div></section>'+
-    '<div class="button-row"><button class="btn primary">Save product</button>'+link(back,'Back to products','btn outline')+'<button type="button" class="btn outline" data-discard-draft hidden>Discard draft</button></div><p class="subtle" data-draft-status role="status"></p>'+productEditStatus()+'</form>';
+    '<section class="panel form-stack"><div class="section-title"><h2>Variants</h2>'+addVariant+'</div>'+
+    (!existing?'<p class="subtle">'+(parent?'Give this option a unique SKU. Choose Published to show it to customers.':'Enter the same SKU in both fields. Save the product to add more variants.')+'</p>':'')+
+    '<div id="variant-fields">'+variantFields(p.variants[0]??{name:'',sku:'',price:0,stock:0,min:1},0,p,false)+'</div>'+
+    (siblings.length?'<div class="button-row" aria-label="Other variants">'+siblings.map(row=>link(href('/admin/products/'+row.sku,filters),e((row.variants[0]?.name??row.sku)+' · '+row.sku),'btn outline small')).join('')+'</div>':'')+'</section>'+
+    '<div class="button-row"><button class="btn primary">'+(parent?'Save variant':'Save product')+'</button>'+link(back,backLabel,'btn outline')+'<button type="button" class="btn outline" data-discard-draft hidden>Discard draft</button></div><p class="subtle" data-draft-status role="status"></p>'+productEditStatus()+'</form>';
 }
 function ordersTable(rows,filters,eligible) {
   const headers=['Order','Customer','Products','Date','Status','Total',''];

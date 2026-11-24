@@ -37,6 +37,8 @@ assert.match(productEditor(p.id),/R2 image URL/);
 assert.match(productEditor(p.id),/name="name"[^>]*maxlength="500"/);
 assert.equal((productEditor('new').match(/<fieldset/g)??[]).length,1);
 assert.ok(!productEditor('new').includes('data-add-variant'));
+assert.match(productEditor(p.id),/data-add-variant[^>]*>Add variant/);
+assert.ok(productEditor('new',new URLSearchParams({variantOf:p.sku})).includes('data-variant-of="'+p.sku+'"'));
 console.log('PASS: inline persistence and validation; R2 replacement; explicit variant override; editor fields');
 
 const {saveHomepage,adminPage}=await import('../dist/admin.js');

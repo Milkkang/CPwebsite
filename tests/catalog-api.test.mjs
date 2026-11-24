@@ -37,6 +37,25 @@ test('API denies mutation, invalid inputs and unknown SKU without HTML fallback'
   });
 });
 
+test('product detail resolves options through a published-only lookup by the group SKU', async () => {
+  const product={sku:'SOAP-500',variant_name:'500g',variant_of:'SOAP-250'};
+  const options=[{sku:'SOAP-250',variant_name:'250g'},{sku:product.sku,variant_name:product.variant_name}];
+  await withFetch(async (url,{headers})=>{
+    const params=new URL(url).searchParams;
+    assert.equal(headers.apikey,env.SUPABASE_PUBLISHABLE_KEY);
+    assert.equal(params.get('status'),'eq.Published');
+    if(params.get('sku')==='eq.SOAP-500')return Response.json([product]);
+    assert.equal(params.get('or'),'(sku.eq.SOAP-250,variant_of.eq.SOAP-250)');
+    return Response.json(options);
+  },async()=>{
+    const response=await call('/api/products/SOAP-500');
+    assert.equal(response.status,200);
+    const {product:listed,options:choices}=await response.json();
+    assert.deepEqual(listed,{sku:product.sku,variant_name:product.variant_name});
+    assert.deepEqual(choices,options);
+  });
+});
+
 test('database outage and absent configuration fail closed without leaking upstream secrets', async () => {
   await withFetch(async()=>new Response('private-error '+env.SUPABASE_SECRET_KEY,{status:500}),async()=>{
     const response=await call('/api/products');assert.equal(response.status,503);
