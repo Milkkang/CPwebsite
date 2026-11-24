@@ -139,21 +139,12 @@ export async function handleAuth(request,env) {
    return result({count:r.data});
   }
   if(path==='/api/admin/products'){
-   if(read){const rows=await db(env,'products?select=id,sku,variant_of,name,variant_name,brand,category_id,description,keywords,status,featured,image_url,original_image_url,r2_image_url,price_cents,stock,reserved_quantity,available_quantity,min_quantity,version&order=id.asc&limit=1000');return result({products:rows.data});}
+   if(read){const rows=await db(env,'products?select=id,sku,name,variant_name,brand,category_id,description,keywords,status,featured,image_url,original_image_url,r2_image_url,price_cents,stock,reserved_quantity,available_quantity,min_quantity,version&order=id.asc&limit=1000');return result({products:rows.data});}
    const data=await bodyJSON(request);
    if(!/^[A-Za-z0-9_-]{1,100}$/.test(data.sku)||!Number.isSafeInteger(data.version)||data.version<0||
       !data.fields||Array.isArray(data.fields)||typeof data.fields!=='object'||
       Object.keys(data.fields).some(key=>!['name','variant_name','brand','category_id','description','keywords','status','featured','image_url','original_image_url','r2_image_url','price_cents','min_quantity'].includes(key))||
-      (data.stock!==undefined&&(!Number.isSafeInteger(data.stock)||data.stock<0||data.stock>1000000))||
-      (data.variantOf!==undefined&&(data.version!==0||typeof data.variantOf!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(data.variantOf))))bad();
-   if(data.variantOf!==undefined){
-    const r=await db(env,'rpc/admin_add_product_variant',{method:'POST',body:{p_actor:who.account.id,p_parent_sku:data.variantOf,p_sku:data.sku,p_fields:data.fields,p_stock:data.stock??null},allowFailure:true});
-    if(r.data?.code==='42501')throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
-    if(r.data?.code==='P0002')throw new ApiError(404,'PRODUCT_NOT_FOUND','The parent product could not be found.');
-    if(r.data?.code==='40001'||r.data?.code==='23505')throw new ApiError(409,'SKU_TAKEN','This SKU is already in use. Enter a unique SKU.');
-    if(!r.ok)throw new ApiError(400,'INVALID_PRODUCT','Variant could not be saved. Check the fields and try again.');
-    return result({product:r.data},undefined,201);
-   }
+      (data.stock!==undefined&&(!Number.isSafeInteger(data.stock)||data.stock<0||data.stock>1000000)))bad();
    const r=await db(env,'rpc/admin_write_product',{method:'POST',body:{p_actor:who.account.id,p_sku:data.sku,p_expected_version:data.version,p_fields:data.fields,p_stock:data.stock??null},allowFailure:true});
    if(!r.ok)throw new ApiError(r.data?.code==='40001'||r.data?.code==='23505'?409:400,r.data?.code==='40001'?'VERSION_CONFLICT':'INVALID_PRODUCT',
      r.data?.code==='40001'?'This product changed in another session. Reload it before saving.':'Product could not be saved. Check the fields and try again.');

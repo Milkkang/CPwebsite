@@ -9,7 +9,6 @@ export function listingFromApi(row,{admin=false}={}) {
     keywords: row.keywords ?? '', status: row.status, featured: row.featured,
     image: row.image_url, original: row.original_image_url, r2: row.r2_image_url,
     version: row.version, reserved:row.reserved_quantity??0,
-    ...(admin&&row.variant_of?{variantOf:row.variant_of}:{}),
     variants: [{sku: row.sku, name: row.variant_name || row.name,
       price: row.price_cents, stock: admin?row.stock:available, min: row.min_quantity,
       image: row.image_url}]

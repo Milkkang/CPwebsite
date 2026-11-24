@@ -136,15 +136,13 @@ export function catalog(path,params,id='',remote) {
     [['featured','Featured'],['price-up','Price · low to high'],['price-down','Price · high to low'],['name','Name · A to Z']].map(([k,v])=>'<option value="'+k+'"'+selected(k,sort)+'>'+v+'</option>').join('')+'</select></label><label>Products per page <select name="size">'+[30,50,100].map(size=>'<option value="'+size+'"'+selected(size,paging.size)+'>'+size+'</option>').join('')+'</select></label></form></div>'+
     (rows.length?grid(remote?rows:rows.slice(paging.start,paging.start+paging.size)):empty('No matching products','Try another keyword, or browse all products.',go('/shop','Shop all','btn primary')))+pagination(path,params,paging,total);
 }
-export function detail(p, params, relatedProducts=state.products, options=[]) {
+export function detail(p, params, relatedProducts=state.products) {
   if(!p||p.status!=='Published') return missing();
   const v=p.variants.find(v=>v.sku===params.get('sku'))??p.variants[0], available=v.stock>=v.min;
   const related=relatedProducts.filter(x=>x.id!==p.id&&x.status==='Published'&&x.category===p.category).slice(0,4);
-  const choices=options.length>1?options.map(row=>({sku:row.sku,name:row.variant_name||row.sku,image:row.image_url,path:href('/product/'+row.sku)})):
-    p.variants.map(row=>({...row,path:href('/product/'+p.id,{sku:row.sku})}));
   return crumb(go('/category/'+p.category,e(categoryName(p.category))),e(p.name))+
     '<section class="detail">'+photo(p,'detail-photo',v)+'<div class="detail-copy"><div class="overline">'+e(p.brand)+'</div><h1>'+e(p.name)+'</h1><p class="detail-price">'+cash(v.price)+'</p><p>'+e(p.description)+'</p>'+
-    (choices.length>1?'<fieldset><legend>Options</legend><div class="variant-row">'+choices.map(row=>'<span class="variant-choice">'+photo(p,'variant-thumb',row)+link(row.path,e(row.name),'btn '+(row.sku===v.sku?'chosen':'outline'))+'</span>').join('')+'</div></fieldset>':'')+
+    (p.variants.length>1?'<fieldset><legend>Pack size</legend><div class="variant-row">'+p.variants.map(row=>'<span class="variant-choice">'+photo(p,'variant-thumb',row)+link(href('/product/'+p.id,{sku:row.sku}),e(row.name),'btn '+(row.sku===v.sku?'chosen':'outline'))+'</span>').join('')+'</div></fieldset>':'')+
     '<p class="stock-note">'+(available?v.stock+' in stock · Minimum '+v.min:'Currently unavailable')+' <span>SKU '+e(v.sku)+'</span></p>'+
     (!state.account?'<div class="button-row">'+link(href('/account',{next:'/product/'+p.id+'?sku='+encodeURIComponent(v.sku)}),'Sign in to add to basket','btn primary')+'<button type="button" class="btn outline" data-save="'+e(p.id)+'" aria-pressed="'+state.saved.includes(p.id)+'">'+icon('heart')+' '+(state.saved.includes(p.id)?'Saved':'Save')+'</button></div>':
     '<form id="add-to-cart" data-sku="'+e(v.sku)+'" class="button-row"><label class="qty-label">Qty <input aria-label="Quantity" name="qty" type="number" min="'+v.min+'" max="'+v.stock+'" value="'+v.min+'" required '+(available?'':'disabled')+'></label><button class="btn primary" '+(available?'':'disabled')+'>Add to basket</button><button type="button" class="btn outline" data-save="'+e(p.id)+'" aria-pressed="'+state.saved.includes(p.id)+'">'+icon('heart')+' '+(state.saved.includes(p.id)?'Saved':'Save')+'</button></form>')+

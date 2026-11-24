@@ -55,41 +55,6 @@ begin
     has_table_privilege('anon','public.order_operations','SELECT') then raise exception 'operation privilege leaked';end if;
 end $$;
 
--- Variants retain independent stock and share the product publication policy.
-begin;
-do $$
-declare admin uuid; outsider uuid; child jsonb; fields jsonb;
-begin
- select id into admin from auth.users where email='phase7@example.invalid';
- select id into outsider from auth.users where email='outsider@example.invalid';
- fields:=jsonb_build_object('name','Operation fixture','variant_name','Large','brand','Fixture','category_id','acceptance',
-  'image_url','https://example.invalid/large.jpg','price_cents',1300,'min_quantity',2,'status','Draft');
- begin
-  perform public.admin_add_product_variant(outsider,'OP-1','OP-L',fields,3);
-  raise exception 'Non-admin created a variant';
- exception when insufficient_privilege then null;
- end;
- child:=public.admin_add_product_variant(admin,'OP-1','OP-L',fields,3);
- if child->>'variant_of' is distinct from 'OP-1' or (child->>'stock')::integer is distinct from 3
-   or not exists(select 1 from public.inventory_movements where product_id='OP-L' and kind='admin_create' and delta=3) then
-  raise exception 'Variant link or independent inventory missing';
- end if;
- child:=public.admin_add_product_variant(admin,'OP-L','OP-XL',fields||'{"status":"Published"}'::jsonb,5);
- if child->>'variant_of' is distinct from 'OP-1' then raise exception 'Variant nested instead of joining the group';end if;
- begin
-  perform public.admin_add_product_variant(admin,'OP-1','OP-L',fields,10);
-  raise exception 'Duplicate variant SKU accepted';
- exception when serialization_failure then null;
- end;
- set local role anon;
- if exists(select 1 from public.products where sku='OP-L') or not exists(select 1 from public.products where sku='OP-XL')
-   or has_function_privilege('anon','public.admin_add_product_variant(uuid,text,text,jsonb,integer)','EXECUTE') then
-  raise exception 'Variant credentials or draft publication boundary incorrect';
- end if;
- reset role;
-end $$;
-rollback;
-
 -- Search aggregation and receipt ownership use the same service-only boundary.
 do $$
 declare u uuid; other uuid; a uuid; o uuid;
