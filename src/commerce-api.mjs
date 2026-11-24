@@ -53,6 +53,13 @@ async function checkoutAvailable(who,env){
  return stripeReady(env)&&(checkoutMode(env)==='live'||(checkoutMode(env)==='live-pilot'&&who.isAdmin===true));
 }
 const checkoutMoney=cents=>'S$'+(cents/100).toFixed(2);
+function checkoutProductImage(value){
+ if(typeof value!=='string'||!value.startsWith('https://')||/\s/.test(value))return '';
+ try{
+  const url=new URL(value);
+  return url.hostname&&!url.username&&!url.password?url.href:'';
+ }catch{return '';}
+}
 function addCheckoutSummary(form,order,live){
  const {items,subtotal_cents:subtotal,shipping_cents:shipping,discount_cents:discount,total_cents:total}=order;
  if(!items?.length||subtotal<=0||discount<0||discount>subtotal||subtotal+shipping-discount!==total)
@@ -68,7 +75,7 @@ function addCheckoutSummary(form,order,live){
   const quantity=net%item.quantity===0?item.quantity:1;
   const variant=item.variant_name&&item.variant_name!==item.product_name?' · '+item.variant_name:'';
   const label=Array.from(item.product_name+variant).slice(0,200).join('');
-  return {name:label+(quantity!==item.quantity?' × '+item.quantity:''),quantity,cents:net/quantity,
+  return {name:label+(quantity!==item.quantity?' × '+item.quantity:''),quantity,cents:net/quantity,image:checkoutProductImage(item.image_url),
    description:reduction?'Original unit price '+checkoutMoney(item.unit_cents)+' · Discount −'+checkoutMoney(reduction):''};
  });
  if(gross!==subtotal||allocated!==discount||products.some(row=>row.cents<0))
@@ -88,13 +95,17 @@ function addCheckoutSummary(form,order,live){
   form.set(key+'[price_data][currency]','sgd');
   form.set(key+'[price_data][unit_amount]',String(line.cents));
   form.set(key+'[price_data][product_data][name]',line.name);
+  if(line.image)form.set(key+'[price_data][product_data][images][0]',line.image);
   if(line.description)form.set(key+'[price_data][product_data][description]',line.description);
  });
  form.set('custom_text[submit][message]',[
   'CP Value Mart · '+(live?'Order ':'Simulated order ')+order.number,
-  'Subtotal '+checkoutMoney(subtotal)+' · Delivery '+(shipping?checkoutMoney(shipping):'Free')+
-   (discount?' · Discount −'+checkoutMoney(discount):'')+' · Total '+checkoutMoney(total)
- ].join('\n'));
+  'Order summary',
+  'Subtotal '+checkoutMoney(subtotal),
+  'Delivery '+(shipping?checkoutMoney(shipping):'Free'),
+  ...(discount?['Discount −'+checkoutMoney(discount)]:[]),
+  'Total '+checkoutMoney(total)
+ ].join('\n\n'));
 }
 async function createSession(request,env){
  originGuard(request);
