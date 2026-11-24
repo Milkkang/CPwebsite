@@ -52,6 +52,50 @@ async function checkoutAvailable(who,env){
  if(checkoutMode(env)==='sandbox')return canUsePreviewCheckout(who,env);
  return stripeReady(env)&&(checkoutMode(env)==='live'||(checkoutMode(env)==='live-pilot'&&who.isAdmin===true));
 }
+const checkoutMoney=cents=>'S$'+(cents/100).toFixed(2);
+function addCheckoutSummary(form,order,live){
+ const {items,subtotal_cents:subtotal,shipping_cents:shipping,discount_cents:discount,total_cents:total}=order;
+ if(!items?.length||subtotal<=0||discount<0||discount>subtotal||subtotal+shipping-discount!==total)
+  throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Checkout is temporarily unavailable.');
+ let gross=0,allocated=0;
+ const products=items.map(item=>{
+  gross+=item.unit_cents*item.quantity;
+  // Allocate the server discount across product rows and preserve every cent.
+  const cumulative=Math.round(discount*(gross/subtotal));
+  const reduction=cumulative-allocated;
+  allocated=cumulative;
+  const net=item.unit_cents*item.quantity-reduction;
+  const quantity=net%item.quantity===0?item.quantity:1;
+  const variant=item.variant_name&&item.variant_name!==item.product_name?' · '+item.variant_name:'';
+  const label=Array.from(item.product_name+variant).slice(0,200).join('');
+  return {name:label+(quantity!==item.quantity?' × '+item.quantity:''),quantity,cents:net/quantity,
+   description:reduction?'Original unit price '+checkoutMoney(item.unit_cents)+' · Discount −'+checkoutMoney(reduction):''};
+ });
+ if(gross!==subtotal||allocated!==discount||products.some(row=>row.cents<0))
+  throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Checkout is temporarily unavailable.');
+ // Stripe allows at most 100 line items. Reserve one for delivery.
+ const lines=products.slice(0,99);
+ if(products.length>99){
+  const remaining=products.slice(98);
+  lines[98]={name:remaining.length+' more product lines',quantity:1,
+   cents:remaining.reduce((sum,row)=>sum+row.cents*row.quantity,0),
+   description:'See your CP Value Mart checkout for the complete item list.'};
+ }
+ lines.push({name:shipping?'Singapore delivery':'Singapore delivery (free)',quantity:1,cents:shipping});
+ lines.forEach((line,index)=>{
+  const key='line_items['+index+']';
+  form.set(key+'[quantity]',String(line.quantity));
+  form.set(key+'[price_data][currency]','sgd');
+  form.set(key+'[price_data][unit_amount]',String(line.cents));
+  form.set(key+'[price_data][product_data][name]',line.name);
+  if(line.description)form.set(key+'[price_data][product_data][description]',line.description);
+ });
+ form.set('custom_text[submit][message]',[
+  'CP Value Mart · '+(live?'Order ':'Simulated order ')+order.number,
+  'Subtotal '+checkoutMoney(subtotal)+' · Delivery '+(shipping?checkoutMoney(shipping):'Free')+
+   (discount?' · Discount −'+checkoutMoney(discount):'')+' · Total '+checkoutMoney(total)
+ ].join('\n'));
+}
 async function createSession(request,env){
  originGuard(request);
  const who=await identity(request,env);
@@ -68,11 +112,12 @@ async function createSession(request,env){
  const form=new URLSearchParams({mode:'payment',success_url:'https://cpvaluemart.com/#/confirmation?session_id={CHECKOUT_SESSION_ID}',cancel_url:'https://cpvaluemart.com/#/checkout?cancelled=1',client_reference_id:order.id,
   customer_email:who.account.checkoutEmail||who.account.email,
   'metadata[order_id]':order.id,'payment_intent_data[metadata][order_id]':order.id,
-  'line_items[0][price_data][currency]':'sgd','line_items[0][price_data][unit_amount]':String(order.total_cents),
-  'line_items[0][price_data][product_data][name]':'CP Value Mart · '+(live?'Order ':'Simulated order ')+order.number,'line_items[0][quantity]':'1',
   expires_at:String(Math.floor(Date.now()/1000)+3600)});
  let session;
- try{session=await stripe(env,'checkout/sessions',form,'checkout/'+order.id);}
+ try{
+  addCheckoutSummary(form,order,live);
+  session=await stripe(env,'checkout/sessions',form,'checkout/'+order.id);
+ }
  catch(error){await db(env,'rpc/release_test_order',{method:'POST',body:{p_order:order.id},allowFailure:true});throw error;}
  if(session.livemode!==live||!sessionPattern(live).test(session.id??'')||
    live&&(session.amount_total!==order.total_cents||session.currency!=='sgd'||session.client_reference_id!==order.id)||

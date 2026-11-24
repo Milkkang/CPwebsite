@@ -13,7 +13,7 @@ test('checkout derives the order total on the server and creates only a Stripe t
  let stripeForm,attached,member={...account,checkoutEmail:'pay@example.invalid'};
  await mocked(async(url,options)=>{
   if(String(url).includes('resolve_web_session'))return Response.json({account:member,isAdmin:false,recoveryOnly:false});
-  if(String(url).includes('create_test_order'))return Response.json({id:orderId,number:'CVM-1000',payment_status:'pending',fulfilment_status:'Processing',tracking_number:'',subtotal_cents:1000,shipping_cents:390,discount_cents:50,total_cents:1340,created_at:new Date().toISOString(),items:[]});
+  if(String(url).includes('create_test_order'))return Response.json({id:orderId,number:'CVM-1000',payment_status:'pending',fulfilment_status:'Processing',tracking_number:'',subtotal_cents:1000,shipping_cents:390,discount_cents:50,total_cents:1340,created_at:new Date().toISOString(),items:[{product_name:'Dental floss',variant_name:'Unwaxed 50 m',unit_cents:250,quantity:3},{product_name:'Soap',variant_name:'Classic',unit_cents:250,quantity:1}]});
   if(String(url)==='https://api.stripe.com/v1/checkout/sessions'){
    assert.equal(options.headers.Authorization,'Bearer sk_test_fake');stripeForm=new URLSearchParams(options.body);
    return Response.json({id:'cs_test_123',url:'https://checkout.stripe.com/c/pay/cs_test_123',livemode:false});
@@ -23,7 +23,15 @@ test('checkout derives the order total on the server and creates only a Stripe t
  },async()=>{
   const response=await call('/api/checkout/session',{addressId,coupon:'WELCOME5',total:1,checkoutEmail:'ignored@example.invalid'});
   assert.equal(response.status,201);const body=await response.json();assert.equal(body.testMode,true);
-  assert.equal(stripeForm.get('line_items[0][price_data][unit_amount]'),'1340');
+  const row=(i,key)=>stripeForm.get('line_items['+i+']'+key);
+  assert.equal(row(0,'[price_data][product_data][name]'),'Dental floss · Unwaxed 50 m × 3');
+  assert.equal(row(0,'[price_data][unit_amount]'),'712');
+  assert.match(row(0,'[price_data][product_data][description]'),/Discount −S\$0\.38/);
+  assert.equal(row(1,'[price_data][unit_amount]'),'238');
+  assert.equal(row(2,'[price_data][product_data][name]'),'Singapore delivery');
+  assert.equal(row(2,'[price_data][unit_amount]'),'390');
+  assert.equal([0,1,2].reduce((total,i)=>total+Number(row(i,'[quantity]'))*Number(row(i,'[price_data][unit_amount]')),0),1340);
+  assert.match(stripeForm.get('custom_text[submit][message]'),/CVM-1000[\s\S]*Subtotal S\$10\.00 · Delivery S\$3\.90 · Discount −S\$0\.50 · Total S\$13\.40/);
   assert.equal(stripeForm.get('customer_email'),'pay@example.invalid');
   assert.equal(stripeForm.get('metadata[order_id]'),orderId);assert.equal(stripeForm.has('total'),false);
   assert.deepEqual(attached,{p_user:userId,p_order:orderId,p_session:'cs_test_123'});
@@ -150,7 +158,7 @@ test('live checkout requires a compatible key and pilot access, and rejects a mi
    const path=new URL(url).pathname;
    if(path.endsWith('resolve_web_session'))return Response.json({account,isAdmin});
    if(path.endsWith('/orders'))return Response.json([]);
-   if(path.endsWith('create_live_order')){created++;return Response.json({id:orderId,number:'CVM-2000',total_cents:1000,live_payment:true});}
+   if(path.endsWith('create_live_order')){created++;return Response.json({id:orderId,number:'CVM-2000',subtotal_cents:1000,shipping_cents:0,discount_cents:0,total_cents:1000,live_payment:true,items:[{product_name:'Soap',variant_name:'Classic',unit_cents:500,quantity:2}]});}
    if(path.endsWith('release_test_order')){released++;return Response.json(true);}
    if(path.endsWith('attach_test_checkout')){attached++;return Response.json(true);}
    assert.equal(path,'/v1/checkout/sessions');
