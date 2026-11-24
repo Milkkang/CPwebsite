@@ -68,11 +68,12 @@ test('real Workers checkout creates test sessions and rejects provider redirects
    if(url.origin==='https://api.stripe.com'){
     assert.equal(url.pathname,'/v1/checkout/sessions');stripeCalls++;
     const form=new URLSearchParams(await request.text());assert.equal(form.get('line_items[0][price_data][unit_amount]'),'100');
+    assert.equal(form.get('line_items[1][price_data][unit_amount]'),'0');
     return redirect?new RuntimeResponse(null,{status:302,headers:{location:'https://never-follow.example/secret'}}):json({id:'cs_test_runtime',url:'https://checkout.stripe.com/c/pay/cs_test_runtime',livemode:false});
    }
    assert.equal(url.origin,origin,'must never forward authorization to a redirect target');
    if(url.pathname.endsWith('resolve_web_session'))return json({account:{id:user,email:'runtime@example.invalid',verified:true},isAdmin:false});
-   if(url.pathname.endsWith('create_test_order'))return json({id:order,number:'CVM-RUNTIME',total_cents:100,items:[]});
+   if(url.pathname.endsWith('create_test_order'))return json({id:order,number:'CVM-RUNTIME',subtotal_cents:100,shipping_cents:0,discount_cents:0,total_cents:100,items:[{product_name:'Fixture product',variant_name:'Standard',unit_cents:100,quantity:1}]});
    if(url.pathname.endsWith('attach_test_checkout'))return json(true);
    if(url.pathname.endsWith('release_test_order')){releases++;return json(true);}
    throw Error('Unexpected runtime fixture route');
