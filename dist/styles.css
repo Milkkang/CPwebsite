@@ -419,6 +419,19 @@ button.photo:disabled {opacity:1;cursor:default}
 .buyer-dashboard {width:min(100%,960px);margin-inline:auto;display:grid;gap:14px}
 .buyer-account-title {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:2px}
 .buyer-account-title p {overflow-wrap:anywhere}
+.annual-pass {display:grid;gap:14px}
+.annual-pass-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.annual-pass-heading h2 {font-size:1.4rem;letter-spacing:-.03em}
+.annual-pass-status {font-size:.82rem;font-weight:700;color:var(--muted)}
+.annual-pass-status[data-status="active"] {color:var(--green)}
+.annual-pass-dates {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,145px),1fr));gap:12px;padding:14px 0;border-block:1px solid var(--line)}
+.annual-pass-dates dt,.annual-pass-timezone {color:var(--muted);font-size:.85rem}
+.annual-pass-dates dd {margin-top:3px;font-variant-numeric:tabular-nums;font-weight:650}
+.annual-pass-form {display:grid;gap:10px}
+.annual-pass-form p {max-width:65ch}
+.annual-pass-price strong {font-size:1.25rem;color:var(--ink);font-variant-numeric:tabular-nums}
+.annual-pass-consent {display:flex;align-items:center;gap:8px;width:fit-content;min-height:38px;cursor:pointer}
+.annual-pass-consent input {width:17px;height:17px;accent-color:var(--green);margin:0}
 .buyer-purchases .section-title,.buyer-product-section .section-title {margin-bottom:13px}
 .buyer-purchases .section-title a,.buyer-product-section .section-title a {white-space:normal;text-align:right}
 .buyer-shortcuts {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
@@ -553,3 +566,11 @@ dialog.product-price-dialog {max-width:min(94vw,650px);max-height:90dvh;overflow
 .product-price-dialog td input {min-width:88px}
 .product-price-dialog [data-price-preview] ul {margin:10px 0;padding-left:20px;overflow-wrap:anywhere}
 .product-table [hidden],.product-drawer [hidden],.product-popover [hidden],.product-price-dialog [hidden],#product-editor [hidden] {display:none!important}
+
+.points-balance,.points-redemption {margin-top:18px}
+.points-redemption {padding-top:16px;border-top:1px solid var(--line)}
+.points-totals {display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:16px;margin:16px 0}
+.points-totals dt {font-size:.875rem;color:#496653}
+.points-totals dd {margin:3px 0 0;font-weight:750;font-size:1.25rem}
+.points-balance .table-wrap {margin-top:10px}
+.points-balance td {overflow-wrap:anywhere}

@@ -1,9 +1,10 @@
+import {adminPointsPage} from './membership-points.js';
 import {listPage,groupOrders} from './admin-lists.js';
 import {state,save,cash,escape as e,categoryName,categories,updateOrder,imageUrl,findProduct,orderDate,homepageSettings} from './store.js';
 import {go,link,href,badge,selected,checked,photo,empty,orderDisplay,productLabel,orderItemsPreview} from './shop.js';
 import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
-const nav=[['','Overview'],['revenue','Revenue'],['orders','Orders'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
+const nav=[['','Overview'],['revenue','Revenue'],['orders','Orders'],['products','Products'],['homepage','Homepage'],['customers','Customers'],['membership-points','Membership points'],['coupons','Coupons'],['search','Search insights'],['settings','Settings']];
 export function adminFrame(page,body) {
   return '<header class="admin-top"><div class="wrap"><a class="logo" href="#/admin"><span class="mark" aria-hidden="true"></span><span>CP Value Mart <b>Admin</b></span></a><div class="button-row">'+go('/','View storefront ↗','btn outline small')+'<button class="btn outline small" data-sign-out>Sign out</button></div></div></header>'+
     '<div class="wrap admin-layout"><aside class="admin-nav"><nav aria-label="Admin">'+nav.map(([k,n])=>go('/admin'+(k?'/'+k:''),n,k===page?'active':'')).join('')+'</nav></aside><main class="admin-main" id="main">'+body+'</main></div>';
@@ -406,7 +407,7 @@ function settingsPage(accountSettings) {
     amountInput('Free delivery threshold (SGD)','threshold',state.settings.threshold)+'<button class="btn primary">Save settings</button></form>'+
     accountSettings;
 }
-export function adminPage(page,id,params,accountSettings='') {
+export function adminPage(page,id,params,accountSettings='',campaignSettings='',pointsLookup) {
   let body;
   switch(page) {
     case '': body=overview(params); break;
@@ -414,7 +415,8 @@ export function adminPage(page,id,params,accountSettings='') {
     case 'products': body=id?productEditor(id,params):productList(params);break;
     case 'orders': return adminFrame(params.get('origin')==='revenue'?'revenue':'orders',id?orderEditor(id,params):ordersPage(params));
     case 'customers': body=customersPage();break;
-    case 'coupons': body=couponPage();break;
+    case 'membership-points': body=adminPointsPage(pointsLookup);break;
+    case 'coupons': body=couponPage()+campaignSettings;break;
     case 'search': body=searchPage();break;
     case 'settings': body=settingsPage(accountSettings);break;
     case 'homepage': body=homepagePage();break;

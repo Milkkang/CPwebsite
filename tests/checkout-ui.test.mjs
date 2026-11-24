@@ -119,3 +119,42 @@ test('public page metadata uses storefront copy and starts without sample promot
  }
  assert.deepEqual(state.coupons,[]);
 });
+
+test('members see point balances and the checkout separates coupon and points discounts',()=>{
+ const previous={account:state.account,cart:state.cart,coupon:state.coupon};
+ try {
+  state.account={id:'points-member',email:'points@example.invalid',verified:true};
+  state.cart={[state.products.find(row=>row.status==='Published').id]:1};
+  state.coupon='';
+  const membership={enabled:true,member:true,points:{available:250,pending:45,expiring:20,nextExpiryAt:'2026-12-24T00:00:00Z',
+   ledger:[{kind:'pending',points:45,createdAt:'2026-11-24T00:00:00Z',orderNumber:'CVM-1000'}]}};
+  const accountHtml=account(new URLSearchParams(),membership);
+  assert.match(accountHtml,/Available points<\/dt><dd>250[\s\S]*Pending delivery<\/dt><dd>45[\s\S]*Expiring within 30 days<\/dt><dd>20/);
+  assert.match(accountHtml,/Earned, awaiting delivery<br>CVM-1000/);
+  assert.match(cart(null,{membership}),/Points to use[\s\S]*Apply points/);
+  const addresses=[{id:'sample',full_name:'Member',address_line:'Example',postal_code:'112233',is_default:true}];
+  assert.match(checkout(addresses,true,{livePayment:true,benefits:{points:200}}),/disabled>Continue to Stripe/);
+  const quote={subtotal:5000,shipping:0,discount:500,couponDiscount:300,pointsDiscount:200,total:4500};
+  assert.match(checkout(addresses,true,{livePayment:true,benefits:{points:200,quote}}),/Coupon<\/dt><dd>−S\$3\.00[\s\S]*Points<\/dt><dd>−S\$2\.00[\s\S]*Total<\/dt><dd>S\$45\.00/);
+ } finally {Object.assign(state,previous);}
+});
+
+test('returning members can find a campaign in their account and choose it in the basket',()=>{
+ const previous={account:state.account,cart:state.cart,coupon:state.coupon};
+ try {
+  const product=state.products.find(row=>row.status==='Published');
+  state.account={id:'member',email:'member@example.invalid',name:'Member',verified:true};
+  state.cart={[product.id]:1};
+  state.coupon='';
+  const campaign={id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',title:'Returning member offer',type:'percent',amount:10,
+   minimum:3000,expiresAt:'2026-12-24T00:00:00Z'};
+  const membership={enabled:true,member:true,welcome:{status:'ineligible'},campaigns:[campaign]};
+  assert.match(account(new URLSearchParams(),membership),/Returning member offer[\s\S]*10% off products[\s\S]*S\$30\.00[\s\S]*24 Dec 2026/);
+  assert.doesNotMatch(account(new URLSearchParams(),{...membership,campaigns:[]}),/Returning member offer/);
+  assert.match(cart(null,{membership}),/data-member-campaign="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"/);
+  const html=cart(null,{membership,selected:campaign.id,quote:{subtotal:5000,shipping:0,discount:500,total:4500}});
+  assert.match(html,/Remove campaign coupon/);
+  assert.match(html,/−S\$5\.00[\s\S]*S\$45\.00/);
+  assert.doesNotMatch(html,/Remove welcome coupon/);
+ } finally {Object.assign(state,previous);}
+});

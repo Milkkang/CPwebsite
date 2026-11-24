@@ -293,3 +293,149 @@ test('checkout return resolves only the exact signed-in buyer session',async()=>
   assert.equal(result.orderNumber,'CVM-2000');assert.equal(result.paymentStatus,'paid');assert.equal(result.livePayment,true);
  });
 });
+
+test('formal member quote reserves the selected points and sends the immutable merchandise amounts to Stripe',async()=>{
+ const launch='2026-01-01T00:00:00Z',settings={...env,STRIPE_CHECKOUT_MODE:'live',STRIPE_SECRET_KEY:'sk_live_fake',MEMBERSHIP_LAUNCH_AT:launch};
+ const campaignId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+ const payload={memberCoupon:campaignId,points:200};
+ const post=(path,data,mode=settings)=>worker.fetch(new Request('https://cpvaluemart.com'+path,{method:'POST',headers:{
+  Origin:'https://cpvaluemart.com',Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify(data)}),mode);
+ const quoteInput={p_user:userId,p_launch:launch,p_live:true,p_member_coupon:campaignId,p_coupon:null,p_points:200};
+ await mocked(async(url,options)=>{
+  const path=new URL(url).pathname;
+  if(path.endsWith('/resolve_web_session'))return Response.json({account,isAdmin:false});
+  if(path.endsWith('/quote_points_checkout')){
+   assert.deepEqual(JSON.parse(options.body),quoteInput);
+   return Response.json({subtotal:5000,shipping:0,discount:500,couponDiscount:300,pointsDiscount:200,total:4500,maxPoints:470});
+  }
+  if(path.endsWith('/create_points_order')){
+   assert.deepEqual(JSON.parse(options.body),{...quoteInput,p_address:addressId,p_expected_total:4500});
+   return Response.json({id:orderId,number:'CVM-1000',subtotal_cents:5000,shipping_cents:0,discount_cents:500,total_cents:4500,
+    member_points_redeemed:200,live_payment:true,items:[
+      {sku:'A',product_name:'Product A',unit_cents:2000,quantity:1},
+      {sku:'B',product_name:'Product B',unit_cents:3000,quantity:1}
+    ],pricing:[
+      {sku:'A',gross_cents:2000,cash_cents:1800,quantity:1,coupon_cents:120,point_cents:80},
+      {sku:'B',gross_cents:3000,cash_cents:2700,quantity:1,coupon_cents:180,point_cents:120}
+    ]});
+  }
+  if(path==='/v1/checkout/sessions'){
+   const stripe=new URLSearchParams(options.body);
+   assert.equal(stripe.get('line_items[0][price_data][unit_amount]'),'1800');
+   assert.equal(stripe.get('line_items[1][price_data][unit_amount]'),'2700');
+   assert.match(stripe.get('custom_text[submit][message]'),/Coupon −S\$3\.00[\s\S]*Points −S\$2\.00[\s\S]*Total S\$45\.00/);
+   return Response.json({id:'cs_live_points',livemode:true,amount_total:4500,currency:'sgd',client_reference_id:orderId,
+    url:'https://checkout.stripe.com/c/pay/points'});
+  }
+  if(path.endsWith('/attach_test_checkout'))return Response.json(true);
+  throw Error('Unexpected request '+url);
+ },async()=>{
+  assert.equal((await (await post('/api/checkout/quote',{...payload,userId:addressId})).json()).pointsDiscount,200);
+  assert.equal((await post('/api/checkout/session',{...payload,addressId,quotedTotal:4500})).status,201);
+  assert.equal((await (await post('/api/checkout/quote',{points:99})).json()).error.code,'POINTS_MINIMUM');
+  assert.equal((await (await post('/api/checkout/session',{...payload,addressId,quotedTotal:4500},{...env,MEMBERSHIP_LAUNCH_AT:launch})).json()).error.code,'POINTS_UNAVAILABLE');
+ });
+});
+
+test('points are scoped to the signed-in member and admin adjustments use the verified actor',async()=>{
+ const launch='2026-01-01T00:00:00Z',settings={...env,STRIPE_CHECKOUT_MODE:'live',MEMBERSHIP_LAUNCH_AT:launch};
+ let admin=false;
+ const balance={available:500,pending:45,expiring:0,ledger:[]};
+ const request=(path,data)=>worker.fetch(new Request('https://cpvaluemart.com'+path,{method:data?'POST':'GET',
+  headers:{Origin:'https://cpvaluemart.com',Cookie:cookie,...(data?{'Content-Type':'application/json'}:{})},
+  ...(data?{body:JSON.stringify(data)}:{})}),settings);
+ await mocked(async(url,options)=>{
+  const path=new URL(url).pathname;
+  if(path.endsWith('/resolve_web_session'))return Response.json({account,isAdmin:admin});
+  if(path.endsWith('/read_membership'))return Response.json({enabled:true,member:true,welcome:null});
+  if(path.endsWith('/read_member_points')){
+   assert.deepEqual(JSON.parse(options.body),{p_user:userId});
+   return Response.json(balance);
+  }
+  if(path.endsWith('/read_admin_member_points')){
+   assert.deepEqual(JSON.parse(options.body),{p_actor:userId,p_email:'customer@example.invalid'});
+   return Response.json({accountId:addressId,points:balance});
+  }
+  if(path.endsWith('/adjust_member_points')){
+   assert.deepEqual(JSON.parse(options.body),{p_actor:userId,p_user:addressId,p_points:-20,p_reason:'Duplicate award',p_request:orderId});
+   return Response.json({...balance,available:480});
+  }
+  throw Error('Unexpected request '+url);
+ },async()=>{
+  const adminPath='/api/admin/membership/points';
+  assert.equal((await (await request('/api/membership?userId='+addressId)).json()).points.available,500);
+  assert.equal((await request(adminPath+'?email=customer@example.invalid')).status,403);
+  admin=true;
+  assert.equal((await (await request(adminPath+'?email=customer@example.invalid')).json()).accountId,addressId);
+  const adjusted=await request(adminPath,{accountId:addressId,points:-20,reason:'Duplicate award',requestId:orderId,actorId:addressId});
+  assert.equal((await adjusted.json()).points.available,480);
+ });
+});
+
+test('member campaign administration authorizes the actor on every read and save',async()=>{
+ const path='/api/admin/member-campaigns';
+ const campaign={title:'Returning members',type:'fixed',amount:300,minimum:5000,
+  startsAt:'2026-11-24T00:00:00.000Z',expiresAt:'2099-12-24T00:00:00.000Z',
+  audience:'returning',memberLimit:1,totalLimit:20,active:true};
+ let isAdmin=false;
+ await mocked(async(url,options)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin});
+  assert.equal(isAdmin,true);
+  const input=JSON.parse(options.body);
+  assert.equal(input.p_actor,userId);
+  if(String(url).endsWith('/rpc/read_member_campaigns'))return Response.json([{...campaign,redeemed:5,testRedeemed:1}]);
+  assert.match(String(url),/\/rpc\/save_member_campaign$/);
+  assert.deepEqual(input,{p_actor:userId,p_id:null,p_version:0,p_campaign:campaign});
+  return Response.json({...campaign,id:orderId,version:1,redeemed:0,testRedeemed:0});
+ },async()=>{
+  assert.equal((await call(path)).status,403);
+  assert.equal((await call(path,campaign)).status,403);
+  isAdmin=true;
+  assert.equal((await (await call(path)).json()).campaigns[0].redeemed,5);
+  assert.equal((await call(path,campaign,{origin:'https://unrelated.invalid'})).status,403);
+  assert.equal((await call(path,{...campaign,memberLimit:21})).status,400);
+  const saved=await call(path,{...campaign,actorId:addressId});
+  assert.equal(saved.status,201);
+  assert.equal((await saved.json()).campaign.version,1);
+ });
+});
+
+test('a campaign coupon is quoted and reserved for the active account at the server total',async()=>{
+ const launch='2026-11-24T00:00:00Z',campaignId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+ const session={id:'cs_test_campaign',livemode:false,amount_total:4700,currency:'sgd',client_reference_id:orderId,
+  url:'https://checkout.stripe.com/c/pay/campaign'};
+ const post=(path,body)=>worker.fetch(new Request('https://cpvaluemart.com'+path,{method:'POST',
+  headers:{Origin:'https://cpvaluemart.com',Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify(body)}),{...env,MEMBERSHIP_LAUNCH_AT:launch});
+ const campaignArgs={p_user:userId,p_campaign:campaignId,p_launch:launch,p_live:false};
+ let denied=false;
+ await mocked(async(url,options)=>{
+  if(String(url).endsWith('/resolve_web_session'))return Response.json({account,isAdmin:false});
+  if(String(url).endsWith('/quote_campaign_checkout')){
+   assert.deepEqual(JSON.parse(options.body),campaignArgs);
+   return denied?Response.json({message:'CAMPAIGN_UNAVAILABLE'},{status:409}):Response.json({subtotal:5000,shipping:0,discount:300,total:4700});
+  }
+  if(String(url).endsWith('/create_campaign_order')){
+   assert.deepEqual(JSON.parse(options.body),{...campaignArgs,p_address:addressId,p_expected_total:4700});
+   return Response.json({id:orderId,number:'CVM-1001',subtotal_cents:5000,shipping_cents:0,discount_cents:300,total_cents:4700,
+    items:[{product_name:'Campaign product',unit_cents:5000,quantity:1}]});
+  }
+  if(String(url)==='https://api.stripe.com/v1/checkout/sessions'){
+   assert.equal(options.body.get('line_items[0][price_data][unit_amount]'),'4700');
+   return Response.json(session);
+  }
+  if(String(url).endsWith('/attach_test_checkout'))return Response.json(true);
+  throw Error('Unexpected request '+url);
+ },async()=>{
+  const selected={memberCoupon:campaignId,userId:addressId,total:1};
+  const quote=await post('/api/checkout/quote',selected);
+  assert.equal((await quote.json()).total,4700);
+  const created=await post('/api/checkout/session',{...selected,addressId,quotedTotal:4700});
+  assert.equal(created.status,201);
+  assert.equal((await created.json()).checkoutUrl,session.url);
+  denied=true;
+  const unavailable=await post('/api/checkout/quote',selected);
+  assert.equal(unavailable.status,409);
+  assert.equal((await unavailable.json()).error.code,'CAMPAIGN_UNAVAILABLE');
+  assert.equal((await post('/api/checkout/quote',{...selected,coupon:'PUBLIC'})).status,400);
+ });
+});

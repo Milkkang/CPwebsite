@@ -1,6 +1,6 @@
 import { authRoute, handleAuth, db, hash } from './auth-api.mjs';
 import { ApiError, catalogRoute, readCatalog } from './catalog-api.mjs';
-import { commerceRoute, handleCommerce } from './commerce-api.mjs';
+import { commerceRoute, handleCommerce, membershipLaunch } from './commerce-api.mjs';
 import { emailRoute, handleEmail, processEmailJobs } from './email-api.mjs';
 import { recordTraffic } from './traffic-api.mjs';
 
@@ -72,5 +72,13 @@ export default {
       status: response.status, durationMs: Math.round(performance.now() - start) }));
     return request.method === 'HEAD' ? new Response(null, response) : response;
   },
-  async scheduled(_controller,env,ctx){ctx.waitUntil(processEmailJobs(env));}
+  async scheduled(_controller,env,ctx){
+    ctx.waitUntil(processEmailJobs(env));
+    const launch=membershipLaunch(env);
+    if(launch&&Date.now()>=Date.parse(launch)){
+      ctx.waitUntil(db(env,'rpc/release_stale_member_campaign_order',{method:'POST',body:{}}).catch(()=>{
+        console.error(JSON.stringify({event:'MEMBER_CAMPAIGN_RECOVERY_FAILED'}));
+      }));
+    }
+  }
 };

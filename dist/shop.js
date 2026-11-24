@@ -1,4 +1,6 @@
+import {pointsBalance,pointsBasketControl} from './membership-points.js';
 import {state,cash,escape as e,categories,categoryName,productPrice,cartLines,totals,matching,imageUrl,statusList,findProduct,buyerOrders,pendingReviewItems,homepageSettings} from './store.js';
+import {campaignAvailability} from './member-campaigns.js';
 
 export const href = (path, params={}) => '#'+path+(Object.keys(params).length ? '?'+new URLSearchParams(params) : '');
 export const link = (path,label,klass='') => '<a class="'+klass+'" href="'+e(path)+'">'+label+'</a>';
@@ -152,7 +154,10 @@ export function detail(p, params, relatedProducts=state.products) {
 export function summary(amounts,checkout=false) {
   return  '<aside class="panel summary"><h2>Order summary</h2>'+
     (checkout?orderItemsPreview(cartLines().map(({sku,product,variant,qty})=>({productId:product?.id,sku,name:product?.name??sku,option:variant?.name??'Unavailable',qty}))):'')+'<dl><div><dt>Subtotal</dt><dd>'+cash(amounts.subtotal)+'</dd></div><div><dt>Delivery</dt><dd>'+cash(amounts.shipping)+'</dd></div>'+
-    (amounts.discount?'<div><dt>Discount</dt><dd>−'+cash(amounts.discount)+'</dd></div>':'')+
+    (amounts.pointsDiscount?
+      (amounts.couponDiscount?'<div><dt>Coupon</dt><dd>−'+cash(amounts.couponDiscount)+'</dd></div>':'')+
+      '<div><dt>Points</dt><dd>−'+cash(amounts.pointsDiscount)+'</dd></div>':
+      amounts.discount?'<div><dt>Discount</dt><dd>−'+cash(amounts.discount)+'</dd></div>':'')+
     '<div class="total"><dt>Total</dt><dd>'+cash(amounts.total)+'</dd></div></dl>'+
     (checkout?'<p class="subtle">Amounts are in SGD.</p>':go('/checkout','Continue to checkout ↗','btn primary full'))+'</aside>';
 }
@@ -166,12 +171,19 @@ function welcomeTerms(coupon) {
   return cash(coupon.discount)+' off '+cash(coupon.minimum)+' of products';
 }
 export function welcomeBasketControl({membership,selected,error,quote}={}) {
-  const coupon=membership?.welcome;
-  if(!selected&&coupon?.status!=='available')return '';
-  return '<div class="coupon-form"><button type="button" class="btn outline" data-welcome-coupon>'+
-    (selected?'Remove welcome coupon':'Use welcome coupon')+'</button>'+
-    (selected?'<p role="status">'+e(error||(quote?'Welcome coupon applied.':'Checking your welcome coupon…'))+'</p>':
-      '<p class="subtle">'+welcomeTerms(coupon)+'</p>')+'</div>';
+  const welcome=membership?.welcome;
+  const campaigns=membership?.campaigns??[];
+  const selectedWelcome=selected===true||selected==='welcome';
+  const selectedCampaign=selected&&!selectedWelcome;
+  const status=message=>'<p role="status">'+e(error||(quote?message+' applied.':'Checking your '+message.toLowerCase()+'…'))+'</p>';
+  const welcomeControl=selectedWelcome||welcome?.status==='available'
+    ?'<div class="coupon-form"><button type="button" class="btn outline" data-welcome-coupon>'+
+     (selectedWelcome?'Remove welcome coupon':'Use welcome coupon')+'</button>'+
+     (selectedWelcome?status('Welcome coupon'):'<p class="subtle">'+welcomeTerms(welcome)+'</p>')+'</div>':'';
+  const removeCampaign=selectedCampaign?'<div class="coupon-form"><button type="button" class="btn outline" data-member-campaign="'+e(selected)+'">Remove campaign coupon</button>'+status('Campaign coupon')+'</div>':'';
+  return welcomeControl+removeCampaign+campaigns.filter(campaign=>campaign.id!==selected).map(campaign=>
+    '<div class="coupon-form"><button type="button" class="btn outline" data-member-campaign="'+e(campaign.id)+'">Use '+e(campaign.title)+
+    '</button><p class="subtle">'+e(campaignAvailability(campaign))+'</p></div>').join('');
 }
 export function cart(repurchase,benefits) {
   if(!state.account)return crumb('Basket')+accountSignIn('/cart');
@@ -182,7 +194,7 @@ export function cart(repurchase,benefits) {
     '<div class="button-row"><button class="btn small outline" data-quantity="'+e(sku)+'" data-delta="-1" aria-label="Decrease quantity">−</button><span>'+qty+'</span><button class="btn small outline" data-quantity="'+e(sku)+'" data-delta="1" aria-label="Increase quantity">+</button><button class="link-button" data-remove="'+e(sku)+'">Remove</button></div></div><strong>'+(variant?cash(variant.price*qty):'—')+'</strong></article>').join('')+
     '<form id="coupon-form" class="coupon-form"><label>Coupon code <input name="code" value="'+e(state.coupon)+'" placeholder="Enter code" maxlength="24"></label><button class="btn outline">Apply</button></form>'+
     (state.coupon?'<p class="subtle">'+(amounts.valid?e(state.coupon)+' is applied.':'Coupon requirements are currently unmet.')+'</p>':'')+
-    '<div data-welcome-basket>'+welcomeBasketControl(benefits)+'</div></section>'+summary(amounts)+'</div>');
+    '<div data-welcome-basket>'+welcomeBasketControl(benefits)+'</div><div data-points-basket>'+pointsBasketControl(benefits)+'</div></section>'+summary(amounts)+'</div>');
 }
 export function checkout(addresses,availability=false,{livePayment=false,pending=false,benefits}={}) {
   if(availability===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Checking availability…</p></section>';
@@ -190,6 +202,7 @@ export function checkout(addresses,availability=false,{livePayment=false,pending
   if(!state.account)return crumb('Checkout')+accountSignIn('/checkout');
   if(pending)return crumb('Checkout')+'<form id="checkout-pending-form" class="panel narrow form-stack"><h1>Checkout in progress</h1><p>Continue your open checkout, or cancel it to make changes to your basket.</p><div class="button-row"><button class="btn primary" value="resume">Continue to Stripe</button><button class="btn outline" value="cancel">Cancel checkout</button></div></form>';
   const rows=cartLines(),amounts=benefits?.quote??totals();
+  const checkingBenefits=(benefits?.selected||benefits?.points)&&!benefits.quote;
   if(!rows.length)return crumb('Checkout')+empty('Your basket is empty','Add a product before starting checkout.',go('/shop','Continue shopping','btn primary'));
   if(addresses===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Loading delivery addresses…</p></section>';
   if(!addresses.length)return crumb('Checkout')+empty('Add a delivery address','Save a Singapore delivery address in your account before checkout.',go('/account','Open my account','btn primary'));
@@ -208,9 +221,9 @@ export function checkout(addresses,availability=false,{livePayment=false,pending
       e(address.full_name)+' · '+e(address.address_line.replace(/\s+/g,' '))+' · Singapore '+e(address.postal_code)+'</option>').join('')+
     '</select></label><div aria-live="polite">'+cards+'</div>'+
     (livePayment?'':'<p class="notice">Use the sample card details provided for this checkout. Do not enter a real card.</p>')+
-    (benefits?.selected&&!benefits.quote?'<p class="notice" role="status">'+e(benefits.error||'Checking your welcome coupon…')+
+    (checkingBenefits?'<p class="notice" role="status">'+e(benefits.error||(benefits.points?'Checking your points…':'Checking your member coupon…'))+
       (benefits.error?' '+go('/cart','Return to your basket'):'')+'</p>':'')+
-    '<button class="btn primary"'+(benefits?.selected&&!benefits.quote?' disabled':'')+'>Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
+    '<button class="btn primary"'+(checkingBenefits?' disabled':'')+'>Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
 }
 function accountSignIn(next='') {
   return '<section class="panel narrow"><h2>Sign in to your account</h2>'+link(href('/account',{next}),'Sign in','btn primary')+'</section>';
@@ -268,8 +281,9 @@ export function membershipPanel(membership) {
     ?new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(coupon.expiresAt))
     :null;
   return '<section class="panel"><h2>Membership centre</h2><p>Free member</p>'+
-    (expiry?'<h3>Welcome coupon</h3><p>'+welcomeTerms(coupon)+'. Valid until '+e(expiry)+' (Singapore time).</p>'+
-      go('/cart','Go to basket','btn outline'):status?'<p>'+status+'</p>':'')+'</section>';
+    (expiry?'<h3>Welcome coupon</h3><p>'+welcomeTerms(coupon)+'. Valid until '+e(expiry)+' (Singapore time).</p>':status?'<p>'+status+'</p>':'')+
+    (membership.campaigns??[]).map(campaign=>'<h3>'+e(campaign.title)+'</h3><p>'+e(campaignAvailability(campaign))+'</p>').join('')+
+    (expiry||membership.campaigns?.length?go('/cart','Go to basket','btn outline'):'')+pointsBalance(membership.points)+'</section>';
 }
 export function account(params,membership) {
   const a=state.account;
@@ -280,7 +294,7 @@ export function account(params,membership) {
   return crumb('My account')+'<div class="buyer-dashboard">'+title+
     '<p>'+e(a.name)+' <span class="subtle">· '+e(a.email)+'</span></p></div>'+
     '<button class="btn outline small" data-sign-out>Sign out</button></div>'+
-    '<div data-membership-centre'+(membership?.enabled&&membership.member?'':' hidden')+'>'+membershipPanel(membership)+'</div>'+purchaseShortcuts(purchases)+
+    '<div data-membership-centre'+(membership?.enabled&&membership.member?'':' hidden')+'>'+membershipPanel(membership)+'</div><div data-annual-pass hidden></div>'+purchaseShortcuts(purchases)+
     buyerProductSection('Recently Viewed',recentlyViewed.slice(0,6),'Products you open will appear here.',
       recentlyViewed.length>6?go('/recently-viewed','View all <span aria-hidden="true">›</span>','text-link'):'')+'</div>';
 }
