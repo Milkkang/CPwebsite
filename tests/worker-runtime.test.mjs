@@ -69,6 +69,10 @@ test('real Workers checkout creates test sessions and rejects provider redirects
     assert.equal(url.pathname,'/v1/checkout/sessions');stripeCalls++;
     const form=new URLSearchParams(await request.text());assert.equal(form.get('line_items[0][price_data][unit_amount]'),'100');
     assert.equal(form.get('line_items[1][price_data][unit_amount]'),'0');
+    assert.equal(form.get('branding_settings[background_color]'),'#f5f6f3');
+    assert.equal(form.get('branding_settings[button_color]'),'#264d3c');
+    assert.equal(form.get('branding_settings[border_style]'),'rounded');
+    assert.equal(form.get('branding_settings[font_family]'),'inter');
     return redirect?new RuntimeResponse(null,{status:302,headers:{location:'https://never-follow.example/secret'}}):json({id:'cs_test_runtime',url:'https://checkout.stripe.com/c/pay/cs_test_runtime',livemode:false});
    }
    assert.equal(url.origin,origin,'must never forward authorization to a redirect target');

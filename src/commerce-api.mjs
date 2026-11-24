@@ -112,6 +112,11 @@ async function createSession(request,env){
  const form=new URLSearchParams({mode:'payment',success_url:'https://cpvaluemart.com/#/confirmation?session_id={CHECKOUT_SESSION_ID}',cancel_url:'https://cpvaluemart.com/#/checkout?cancelled=1',client_reference_id:order.id,
   customer_email:who.account.checkoutEmail||who.account.email,
   'metadata[order_id]':order.id,'payment_intent_data[metadata][order_id]':order.id,
+  // Match the storefront palette and use its first font available in Stripe Checkout.
+  'branding_settings[background_color]':'#f5f6f3',
+  'branding_settings[button_color]':'#264d3c',
+  'branding_settings[border_style]':'rounded',
+  'branding_settings[font_family]':'inter',
   expires_at:String(Math.floor(Date.now()/1000)+3600)});
  let session;
  try{
