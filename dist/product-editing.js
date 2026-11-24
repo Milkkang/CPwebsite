@@ -210,7 +210,7 @@ export function initProductEditing({app,account,render,writeProduct,writePrices,
 
   function restoreDraft(form,owner) {
     const id=form.dataset.id||'new';
-    const key=draftKey(owner,form.dataset.variantOf?'variant:'+form.dataset.variantOf:id);
+    const key=draftKey(owner,id);
     const version=findProduct(id)?.version??0;
     full={form,key,owner,version,original:valuesOf(form)};
     try{
@@ -248,11 +248,12 @@ export function initProductEditing({app,account,render,writeProduct,writePrices,
       const payload=fullPayload(form,new FormData(form));
       setBusy(edit,true);
       const stock=form.dataset.id&&String(payload.stock)===edit.original.variantStock?undefined:payload.stock;
-      await writeProduct(payload.sku,edit.version,payload.fields,stock,payload.variantOf);
+      await writeProduct(payload.sku,edit.version,payload.fields,stock);
       discardDraft(edit);
       if(full!==edit||account()!==owner)return;
-      location.hash=form.dataset.back;
-      message(payload.variantOf?'Variant saved.':'Product saved.');
+      const back=form.querySelector('a.btn').getAttribute('href');
+      location.hash=back;
+      message('Product saved.');
     }catch(error){
       if(full!==edit)return;
       if(error.code==='VERSION_CONFLICT'){
