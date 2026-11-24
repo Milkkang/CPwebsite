@@ -328,7 +328,12 @@ function orderEditor(id,params) {
 }
 function couponPage() {
   return heading('Coupons','Create and manage codes for the storefront.','<button class="btn primary" data-edit-coupon="">Add coupon</button>')+
-    table(['Code','Type','Value','Min. subtotal','Status',''],state.coupons.map(c=>'<tr><td><b>'+e(c.code)+'</b></td><td>'+e(c.type==='shipping'?'Free delivery':c.type==='fixed'?'Fixed discount':'Percentage')+'</td><td>'+(c.type==='shipping'?'—':c.type==='fixed'?cash(c.amount):c.amount+'%')+'</td><td>'+cash(c.min)+'</td><td>'+badge(c.active?'Active':'Inactive')+'</td><td><button class="btn small outline" data-edit-coupon="'+e(c.code)+'">Edit</button></td></tr>').join('')||'<tr><td colspan="6">No coupons created.</td></tr>');
+    table(['Code','Type','Value','Min. subtotal','Status',''],state.coupons.map(c=>{
+      const code=e(c.code);
+      return '<tr><td><b>'+code+'</b></td><td>'+e(c.type==='shipping'?'Free delivery':c.type==='fixed'?'Fixed discount':'Percentage')+'</td><td>'+(c.type==='shipping'?'—':c.type==='fixed'?cash(c.amount):c.amount+'%')+'</td><td>'+cash(c.min)+'</td><td>'+badge(c.active?'Active':'Inactive')+'</td><td>'+
+        '<button class="btn small outline" data-edit-coupon="'+code+'">Edit</button> '+
+        '<button class="btn small outline" data-delete-coupon="'+code+'" aria-label="Delete coupon '+code+'">Delete</button></td></tr>';
+    }).join('')||'<tr><td colspan="6">No coupons created.</td></tr>');
 }
 function customersPage() {
   const customers=new Map();

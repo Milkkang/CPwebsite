@@ -279,7 +279,30 @@ begin
  if (select count(*) from public.email_jobs where order_id=(result->>'id')::uuid and kind='cancellation' and not is_test)<>1 then
   raise exception 'Live cancellation email missing or duplicated';
  end if;
- simulated:=(public.create_test_order(buyer,addr,null)->>'id')::uuid;
+ insert into public.coupons(code,kind,amount,minimum_cents,active) values('QA-COUPON','fixed',100,0,true);
+ simulated:=(public.create_test_order(buyer,addr,'QA-COUPON')->>'id')::uuid;
+ update public.coupons set active=false,deleted_at=now() where code='QA-COUPON' and version=1 and deleted_at is null;
+ if not exists(select 1 from public.coupons where code='QA-COUPON' and not active and deleted_at is not null and version=2)
+   or not exists(select 1 from public.orders where id=simulated and coupon_code='QA-COUPON' and discount_cents=100) then
+  raise exception 'Coupon deletion changed historical order details or failed to bump the version';
+ end if;
+ begin
+  update public.coupons set active=true where code='QA-COUPON';
+  raise exception 'Deleted coupon was reactivated';
+ exception when check_violation then null;
+ end;
+ begin
+  perform public.create_test_order(buyer,addr,'QA-COUPON');
+  raise exception 'Test checkout accepted a deleted coupon';
+ exception when raise_exception then
+  if sqlerrm<>'COUPON_INVALID' then raise; end if;
+ end;
+ begin
+  perform public.create_live_order(buyer,addr,'QA-COUPON');
+  raise exception 'Live checkout accepted a deleted coupon';
+ exception when raise_exception then
+  if sqlerrm<>'COUPON_INVALID' then raise; end if;
+ end;
  begin
   perform public.apply_test_payment_event('evt_sim_live','checkout.session.completed',true,simulated,'cs_live_fixture','pi_live_fixture',50,'sgd');
   raise exception 'Live event was applied to simulation';

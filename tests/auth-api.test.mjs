@@ -82,6 +82,42 @@ test('database identity controls admin status; recovery session cannot read memb
  });
 });
 
+test('admin coupon deletion uses a versioned soft delete and filters deleted coupons',async()=>{
+ const cookie='__Host-cvm-session='+'a'.repeat(64);
+ const payload={action:'deleteCoupon',code:'PROMO-10',version:2};
+ let isAdmin=false,deleted=false,patches=0;
+ await mocked(async(url,options)=>{
+  const {pathname,searchParams}=new URL(url);
+  if(pathname.endsWith('resolve_web_session'))return Response.json({account,isAdmin});
+  if(pathname.endsWith('/homepage_config')||pathname.endsWith('/delivery_rules'))return Response.json([]);
+  assert.equal(pathname,'/rest/v1/coupons');
+  assert.equal(searchParams.get('deleted_at'),'is.null');
+  if(options.method==='GET')return Response.json(deleted?[]:[{code:payload.code,version:2}]);
+  assert.equal(options.method,'PATCH');
+  assert.equal(searchParams.get('code'),'eq.PROMO-10');
+  assert.equal(searchParams.get('version'),'eq.2');
+  patches++;
+  if(deleted)return Response.json([]);
+  const body=JSON.parse(options.body);
+  assert.equal(body.active,false);
+  assert.ok(Number.isFinite(Date.parse(body.deleted_at)));
+  deleted=true;
+  return Response.json([{code:payload.code,active:false,version:3}]);
+ },async()=>{
+  const path='/api/admin/config';
+  assert.equal((await run(path,payload,{cookie})).status,403);
+  isAdmin=true;
+  assert.equal((await run(path,{...payload,version:0},{cookie})).status,400);
+  assert.equal((await run(path,{...payload,code:'bad code'},{cookie})).status,400);
+  assert.equal((await run(path,payload,{cookie})).status,200);
+  const list=await run(path,undefined,{cookie});
+  assert.equal(list.status,200);
+  assert.deepEqual((await list.json()).coupons,[]);
+  assert.equal((await run(path,payload,{cookie})).status,409);
+  assert.equal(patches,2);
+ });
+});
+
 test('logout deletes website session even when upstream logout fails, and old cookie stops working',async()=>{
  let revoked=false;
  const cookie='__Host-cvm-session='+'b'.repeat(64);
