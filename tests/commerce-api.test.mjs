@@ -37,6 +37,57 @@ test('membership reads only the verified account on the current session',async()
  });
 });
 
+test('membership preview uses only its explicitly configured Sandbox database host',async()=>{
+ const ref='a'.repeat(20),isolated='https://'+ref+'.supabase.co';
+ const request=()=>new Request('https://fixture-cpwebsite.milkkang93.workers.dev/api/membership',{headers:{Cookie:cookie}});
+ let calls=0;
+ await mocked(async url=>{
+  assert.equal(new URL(url).origin,isolated);
+  calls++;
+  return Response.json({account,isAdmin:false});
+ },async()=>{
+  const settings={...env,STRIPE_CHECKOUT_MODE:'sandbox',SUPABASE_URL:isolated,MEMBERSHIP_PREVIEW_SUPABASE_REF:ref};
+  assert.equal((await worker.fetch(request(),settings)).status,200);
+  assert.equal((await worker.fetch(request(),{...settings,STRIPE_CHECKOUT_MODE:'live'})).status,503);
+  assert.equal((await worker.fetch(request(),{...settings,SUPABASE_URL:isolated+'.example.invalid'})).status,503);
+  assert.equal((await worker.fetch(request(),{...settings,MEMBERSHIP_PREVIEW_SUPABASE_REF:undefined})).status,503);
+  assert.equal(calls,1);
+ });
+});
+
+test('consumption tiers open independently for the signed-in verified member',async()=>{
+ const first='2026-01-01T00:00:00Z',second='2026-02-01T00:00:00Z';
+ const tier={tier:'silver',qualifyingSpend:30000,multiplier:125,nextTier:'gold',nextThreshold:80000};
+ const request=()=>new Request('https://cpvaluemart.com/api/membership?userId='+addressId,{headers:{Cookie:cookie}});
+ const settings={...env,STRIPE_CHECKOUT_MODE:'live',MEMBERSHIP_LAUNCH_AT:first};
+ let member=account;
+ let tierReads=0;
+ await mocked(async(url,options)=>{
+  const path=new URL(url).pathname;
+  if(path.endsWith('/resolve_web_session'))return Response.json({account:member,isAdmin:false});
+  if(path.endsWith('/read_membership'))return Response.json({enabled:true,member:true,welcome:null});
+  if(path.endsWith('/read_member_points'))return Response.json({available:0,pending:0,expiring:0,ledger:[]});
+  if(path.endsWith('/read_membership_tier')){
+   assert.deepEqual(JSON.parse(options.body),{p_user:member.id});
+   return Response.json(++tierReads===1?tier:{tier:'base',qualifyingSpend:0,multiplier:100,nextTier:'silver',nextThreshold:30000});
+  }
+  throw Error('Unexpected request '+url);
+ },async()=>{
+  for(const launch of [undefined,'invalid','2099-02-01T00:00:00Z','2025-12-31T23:59:59Z']){
+   const response=await worker.fetch(request(),{...settings,MEMBERSHIP_TIERS_LAUNCH_AT:launch});
+   assert.equal((await response.json()).spendingTier,undefined);
+  }
+  assert.equal((await (await worker.fetch(request(),{...settings,STRIPE_CHECKOUT_MODE:'sandbox',MEMBERSHIP_TIERS_LAUNCH_AT:second})).json()).spendingTier,undefined);
+  const enabled={...settings,MEMBERSHIP_TIERS_LAUNCH_AT:second};
+  assert.deepEqual((await (await worker.fetch(request(),enabled)).json()).spendingTier,tier);
+  member={...account,id:addressId};
+  assert.equal((await (await worker.fetch(request(),enabled)).json()).spendingTier.tier,'base');
+  member={...member,verified:false};
+  assert.equal((await (await worker.fetch(request(),enabled)).json()).spendingTier,undefined);
+  assert.equal(tierReads,2);
+ });
+});
+
 test('checkout quotes the welcome discount for the session owner and cannot stack a public coupon',async()=>{
  const launch='2026-11-24T00:00:00Z';
  const settings={...env,MEMBERSHIP_LAUNCH_AT:launch};
@@ -172,13 +223,36 @@ test('checkout rejects cross-site requests and missing test credentials before o
  });
 });
 
-async function signedRequest(event){
+async function signedRequest(event,config=env){
  const raw=JSON.stringify(event),timestamp=Math.floor(Date.now()/1000);
- const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+ const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(config.STRIPE_WEBHOOK_SECRET),{name:'HMAC',hash:'SHA-256'},false,['sign']);
  const bytes=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(timestamp+'.'+raw));
  const signature=[...new Uint8Array(bytes)].map(n=>n.toString(16).padStart(2,'0')).join('');
  return new Request('https://cpvaluemart.com/api/stripe/webhook',{method:'POST',headers:{'Content-Type':'application/json','Stripe-Signature':`t=${timestamp},v1=${signature}`},body:raw});
 }
+test('a delayed signed payment uses the provider time to select the tier rollout',async()=>{
+ const tierLaunch='2026-02-01T00:00:00Z';
+ const settings={...env,STRIPE_SECRET_KEY:'sk_live_fixture',STRIPE_WEBHOOK_SECRET:'whsec_tier_fixture',
+  STRIPE_CHECKOUT_MODE:'live',MEMBERSHIP_LAUNCH_AT:'2026-01-01T00:00:00Z',MEMBERSHIP_TIERS_LAUNCH_AT:tierLaunch};
+ const event={id:'evt_tier_webhook',type:'checkout.session.completed',livemode:true,data:{object:{
+  id:'cs_live_tier',metadata:{order_id:orderId},payment_status:'paid',payment_intent:'pi_tier',amount_total:10000,currency:'sgd'}}};
+ const seen=[];
+ await mocked(async(url,options)=>{
+  seen.push([new URL(url).pathname.split('/').at(-1),JSON.parse(options.body)]);
+  return Response.json({outcome:'paid'});
+ },async()=>{
+  const epoch=date=>Date.parse(date)/1000;
+  for(const date of ['2026-01-31T23:59:59Z',tierLaunch]){
+   const request=await signedRequest({...event,created:epoch(date)},settings);
+   assert.equal((await worker.fetch(request,settings)).status,200);
+  }
+  assert.equal(seen[0][0],'apply_test_payment_event');
+  assert.equal(seen[1][0],'apply_tier_payment_event');
+  assert.equal(seen[1][1].p_paid_at,'2026-02-01T00:00:00.000Z');
+  assert.equal(seen[1][1].p_amount,10000);
+  assert.equal(seen[1][1].p_tiers_launch,tierLaunch);
+ });
+});
 test('webhook verifies its signature, rejects live events and forwards only server payment fields',async()=>{
  const event={id:'evt_test_1',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_test_123',payment_status:'paid',payment_intent:'pi_test_1',amount_total:1340,currency:'sgd',metadata:{order_id:orderId}}}};let applied;
  await mocked(async(url,options)=>{if(String(url).includes('apply_test_payment_event')){applied=JSON.parse(options.body);return Response.json({duplicate:false,outcome:'paid'});}throw Error('Unexpected request');},async()=>{
@@ -437,5 +511,53 @@ test('a campaign coupon is quoted and reserved for the active account at the ser
   assert.equal(unavailable.status,409);
   assert.equal((await unavailable.json()).error.code,'CAMPAIGN_UNAVAILABLE');
   assert.equal((await post('/api/checkout/quote',{...selected,coupon:'PUBLIC'})).status,400);
+ });
+});
+
+test('annual delivery allowance quotes and charges final shipping for the current Sandbox account',async()=>{
+ const launch='2020-01-01T00:00:00Z';
+ const settings={...env,MEMBERSHIP_LAUNCH_AT:launch,MEMBERSHIP_TIERS_LAUNCH_AT:launch,PAID_MEMBERSHIP_LAUNCH_AT:launch};
+ const token='77777777-7777-4777-8777-777777777777/0';
+ const post=(path,payload,config=settings)=>worker.fetch(new Request('https://cpvaluemart.com'+path,{method:'POST',
+  headers:{Origin:'https://cpvaluemart.com',Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify(payload)}),config);
+ const selection={coupon:'PRODUCT',deliveryAllowance:true};
+ const quoteInput={p_user:userId,p_launch:launch,p_live:false,p_member_coupon:null,p_coupon:'PRODUCT',p_points:0,p_use:true};
+ const allowance={amount:390,discount:390,month:token,expiresAt:'2026-12-24T00:00:00Z'};
+ await mocked(async(url,options)=>{
+  const path=new URL(url).pathname;
+  if(path.endsWith('/resolve_web_session'))return Response.json({account,isAdmin:false});
+  if(path.endsWith('/quote_delivery_checkout')){
+   assert.deepEqual(JSON.parse(options.body),quoteInput);
+   return Response.json({subtotal:3200,shipping:110,discount:300,total:3010,deliveryAllowance:allowance});
+  }
+  if(path.endsWith('/create_delivery_order')){
+   assert.deepEqual(JSON.parse(options.body),{...quoteInput,p_address:addressId,p_expected_total:3010,p_month:token});
+   return Response.json({id:orderId,number:'CVM-1000',subtotal_cents:3200,shipping_cents:110,discount_cents:300,total_cents:3010,
+    delivery_allowance_cents:390,items:[{product_name:'QA',unit_cents:3200,quantity:1}]});
+  }
+  if(path==='/v1/checkout/sessions'){
+   const form=new URLSearchParams(options.body);
+   assert.equal(form.get('line_items[0][price_data][unit_amount]'),'2900');
+   assert.equal(form.get('line_items[1][price_data][unit_amount]'),'110');
+   assert.match(form.get('custom_text[submit][message]'),/Annual pass delivery −S\$3\.90/);
+   return Response.json({id:'cs_test_delivery',livemode:false,amount_total:3010,currency:'sgd',client_reference_id:orderId,
+    url:'https://checkout.stripe.com/c/pay/delivery'});
+  }
+  if(path.endsWith('/attach_test_checkout'))return Response.json(true);
+  throw Error('Unexpected request '+url);
+ },async()=>{
+  const quote=await post('/api/checkout/quote',{...selection,userId:addressId});
+  assert.equal(quote.status,200);
+  const {requestId,...quoted}=await quote.json();
+  assert.ok(requestId);
+  assert.deepEqual(quoted,{subtotal:3200,shipping:110,discount:300,total:3010,deliveryAllowance:allowance,accountId:userId});
+  const created=await post('/api/checkout/session',{...selection,addressId,quotedTotal:3010,deliveryMonth:token,total:1});
+  assert.equal(created.status,201);
+  assert.equal((await created.json()).order.shipping,110);
+  for(const value of [undefined,'2026-02-30T00:00:00Z','2099-01-01T00:00:00Z']){
+   const closed={...settings,PAID_MEMBERSHIP_LAUNCH_AT:value};
+   assert.equal((await (await post('/api/checkout/quote',selection,closed)).json()).error.code,'DELIVERY_ALLOWANCE_UNAVAILABLE');
+   assert.equal((await (await post('/api/checkout/session',{...selection,addressId,quotedTotal:3010,deliveryMonth:token},closed)).json()).error.code,'DELIVERY_ALLOWANCE_UNAVAILABLE');
+  }
  });
 });

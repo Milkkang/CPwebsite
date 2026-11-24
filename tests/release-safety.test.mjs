@@ -1,6 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {analyticsData} from '../dist/analytics.js';
+
+test('partially refunded merchandise orders contribute only retained cash to sales',()=>{
+ const day='2026-11-20';
+ const sale={date:day,status:'Delivered',paymentStatus:'paid',livePayment:true,totals:{total:4500},refundedCents:1800};
+ const result=analyticsData({from:day,to:day},'1d',[sale]);
+ assert.equal(result.totals.sales,2700);
+ assert.equal(result.totals.orders,1);
+});
 import {state,syncAutoReceipts} from '../dist/store.js';
 import worker from '../src/worker.mjs';
 test('test orders never become real revenue or invented visitor traffic',()=>{

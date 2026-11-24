@@ -1,6 +1,6 @@
 import {adminPointsPage} from './membership-points.js';
 import {listPage,groupOrders} from './admin-lists.js';
-import {state,save,cash,escape as e,categoryName,categories,updateOrder,imageUrl,findProduct,orderDate,homepageSettings} from './store.js';
+import {state,save,cash,escape as e,categoryName,categories,updateOrder,imageUrl,findProduct,orderDate,homepageSettings,netOrderTotal} from './store.js';
 import {go,link,href,badge,selected,checked,photo,empty,orderDisplay,productLabel,orderItemsPreview} from './shop.js';
 import {overviewAnalytics,revenueMetric,revenueAnalytics} from './analytics.js';
 
@@ -54,7 +54,7 @@ function revenueSelection(params,today=orderDate()) {
   const orders=state.adminOrders.filter(o=>o.date>=period.from&&o.date<=period.to).sort((a,b)=>b.date.localeCompare(a.date));
   return {range,period,orders,dateError};
 }
-const orderRevenue=order=>order.livePayment&&order.paymentStatus==='paid'&&order.status!=='Cancelled'?order.totals.total:0;
+const orderRevenue=order=>order.livePayment&&order.paymentStatus==='paid'&&order.status!=='Cancelled'?netOrderTotal(order):0;
 function revenuePage(params) {
   const today=orderDate();
   const {range,period,orders,dateError}=revenueSelection(params,today);
@@ -83,7 +83,7 @@ function simulatedSalesCalendar(params){
  const monthNames=Array.from({length:12},(_,i)=>new Intl.DateTimeFormat('en-SG',{month:'long',timeZone:'UTC'}).format(new Date(Date.UTC(year,i,1))));
  const paid=state.adminOrders.filter(o=>!o.livePayment&&o.paymentStatus==='paid'&&o.status!=='Cancelled'&&o.date.startsWith(String(year)));
  const byDay=new Map();
- for(const order of paid){const day=byDay.get(order.date)??{count:0,total:0};day.count++;day.total+=order.totals.total;byDay.set(order.date,day);}
+ for(const order of paid){const day=byDay.get(order.date)??{count:0,total:0};day.count++;day.total+=netOrderTotal(order);byDay.set(order.date,day);}
  const months=monthNames.map((name,index)=>{
   const prefix=year+'-'+String(index+1).padStart(2,'0');
   const days=[...byDay.entries()].filter(([day])=>day.startsWith(prefix)).sort(([a],[b])=>b.localeCompare(a));
@@ -315,6 +315,10 @@ function orderOperations(order){
   const action=(name,label)=>'<button type="button" class="btn outline" data-order-action="'+name+
     '" data-order-id="'+e(order.id)+'">'+label+'</button>';
   const pending=order.pendingRefund;
+  const request=order.refundRequest;
+  if(request&&!request.reenter&&pending?.requestId!==request.id){
+    return '<section class="panel form-stack"><h2>Refund status</h2><p>Check the previous refund before submitting another.</p>'+action('resume_refund','Resume refund')+'</section>';
+  }
   if(pending){
     const items=pending.items?.map(row=>'<li>'+e(order.items.find(item=>item.sku===row.sku)?.name??row.sku)+' × '+e(row.quantity)+'</li>').join('');
     return '<section class="panel form-stack"><h2>Refund pending</h2><p>'+cash(pending.amount)+' · '+(pending.restock?'Return items to stock':'Keep current stock')+'</p>'+
@@ -376,11 +380,13 @@ function salesTables(orders) {
   const revenue=new Map(), products=new Map();
   for(const order of orders) {
     const day=revenue.get(order.date)??{orders:0,total:0};
-    day.total+=order.totals.total; day.orders++;
+    day.total+=netOrderTotal(order); day.orders++;
     revenue.set(order.date,day);
     for(const item of order.items) {
+      const quantity=item.qty-(item.refundedQty??0);
+      if(quantity<=0)continue;
       const product=products.get(item.productId)??{id:item.productId,name:item.name,units:0,total:0};
-      product.units+=item.qty; product.total+=item.price*item.qty;
+      product.units+=quantity; product.total+=item.price*quantity;
       products.set(item.productId,product);
     }
   }

@@ -153,7 +153,8 @@ export function detail(p, params, relatedProducts=state.products) {
 }
 export function summary(amounts,checkout=false) {
   return  '<aside class="panel summary"><h2>Order summary</h2>'+
-    (checkout?orderItemsPreview(cartLines().map(({sku,product,variant,qty})=>({productId:product?.id,sku,name:product?.name??sku,option:variant?.name??'Unavailable',qty}))):'')+'<dl><div><dt>Subtotal</dt><dd>'+cash(amounts.subtotal)+'</dd></div><div><dt>Delivery</dt><dd>'+cash(amounts.shipping)+'</dd></div>'+
+    (checkout?orderItemsPreview(cartLines().map(({sku,product,variant,qty})=>({productId:product?.id,sku,name:product?.name??sku,option:variant?.name??'Unavailable',qty}))):'')+'<dl><div><dt>Subtotal</dt><dd>'+cash(amounts.subtotal)+'</dd></div><div><dt>Delivery</dt><dd>'+cash(amounts.shipping+(amounts.deliveryAllowance?.discount??0))+'</dd></div>'+
+    (amounts.deliveryAllowance?.discount?'<div><dt>Annual pass delivery</dt><dd>−'+cash(amounts.deliveryAllowance.discount)+'</dd></div>':'')+
     (amounts.pointsDiscount?
       (amounts.couponDiscount?'<div><dt>Coupon</dt><dd>−'+cash(amounts.couponDiscount)+'</dd></div>':'')+
       '<div><dt>Points</dt><dd>−'+cash(amounts.pointsDiscount)+'</dd></div>':
@@ -185,6 +186,25 @@ export function welcomeBasketControl({membership,selected,error,quote}={}) {
     '<div class="coupon-form"><button type="button" class="btn outline" data-member-campaign="'+e(campaign.id)+'">Use '+e(campaign.title)+
     '</button><p class="subtle">'+e(campaignAvailability(campaign))+'</p></div>').join('');
 }
+const memberDate=new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'});
+const tierNames={base:'Base',silver:'Silver',gold:'Gold'};
+function deliveryTerms(allowance){
+  return 'Save up to '+cash(allowance.amount)+' on standard delivery when products total '+cash(allowance.minimum)+' or more.';
+}
+function deliveryStatus(allowance){
+  if(allowance.status==='used')return 'You have used your delivery allowance for this membership month.';
+  if(allowance.status==='reserved')return 'Your delivery allowance is reserved in an open checkout.';
+  return deliveryTerms(allowance);
+}
+export function deliveryBasketControl({membership,delivery,quote,error}={}) {
+  const allowance=membership?.deliveryAllowance;
+  if(!allowance&&!delivery)return '';
+  return '<div class="points-redemption"><h3>Annual pass delivery</h3>'+
+    (allowance?'<p>'+deliveryStatus(allowance)+'</p>':'')+
+    (delivery||allowance?.available?'<button type="button" class="btn outline" data-delivery-allowance>'+
+      (delivery?'Remove delivery allowance':'Use delivery allowance')+'</button>':'')+
+    (delivery?'<p role="status">'+e(error||(quote?'Delivery allowance applied.':'Checking your delivery allowance…'))+'</p>':'')+'</div>';
+}
 export function cart(repurchase,benefits) {
   if(!state.account)return crumb('Basket')+accountSignIn('/cart');
   const rows=cartLines(), amounts=benefits?.quote??totals();
@@ -194,7 +214,8 @@ export function cart(repurchase,benefits) {
     '<div class="button-row"><button class="btn small outline" data-quantity="'+e(sku)+'" data-delta="-1" aria-label="Decrease quantity">−</button><span>'+qty+'</span><button class="btn small outline" data-quantity="'+e(sku)+'" data-delta="1" aria-label="Increase quantity">+</button><button class="link-button" data-remove="'+e(sku)+'">Remove</button></div></div><strong>'+(variant?cash(variant.price*qty):'—')+'</strong></article>').join('')+
     '<form id="coupon-form" class="coupon-form"><label>Coupon code <input name="code" value="'+e(state.coupon)+'" placeholder="Enter code" maxlength="24"></label><button class="btn outline">Apply</button></form>'+
     (state.coupon?'<p class="subtle">'+(amounts.valid?e(state.coupon)+' is applied.':'Coupon requirements are currently unmet.')+'</p>':'')+
-    '<div data-welcome-basket>'+welcomeBasketControl(benefits)+'</div><div data-points-basket>'+pointsBasketControl(benefits)+'</div></section>'+summary(amounts)+'</div>');
+    '<div data-welcome-basket>'+welcomeBasketControl(benefits)+'</div><div data-points-basket>'+pointsBasketControl(benefits)+
+    '</div><div data-delivery-basket>'+deliveryBasketControl(benefits)+'</div></section>'+summary(amounts)+'</div>');
 }
 export function checkout(addresses,availability=false,{livePayment=false,pending=false,benefits}={}) {
   if(availability===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Checking availability…</p></section>';
@@ -202,7 +223,7 @@ export function checkout(addresses,availability=false,{livePayment=false,pending
   if(!state.account)return crumb('Checkout')+accountSignIn('/checkout');
   if(pending)return crumb('Checkout')+'<form id="checkout-pending-form" class="panel narrow form-stack"><h1>Checkout in progress</h1><p>Continue your open checkout, or cancel it to make changes to your basket.</p><div class="button-row"><button class="btn primary" value="resume">Continue to Stripe</button><button class="btn outline" value="cancel">Cancel checkout</button></div></form>';
   const rows=cartLines(),amounts=benefits?.quote??totals();
-  const checkingBenefits=(benefits?.selected||benefits?.points)&&!benefits.quote;
+  const checkingBenefits=(benefits?.selected||benefits?.points||benefits?.delivery)&&!benefits.quote;
   if(!rows.length)return crumb('Checkout')+empty('Your basket is empty','Add a product before starting checkout.',go('/shop','Continue shopping','btn primary'));
   if(addresses===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Loading delivery addresses…</p></section>';
   if(!addresses.length)return crumb('Checkout')+empty('Add a delivery address','Save a Singapore delivery address in your account before checkout.',go('/account','Open my account','btn primary'));
@@ -221,7 +242,7 @@ export function checkout(addresses,availability=false,{livePayment=false,pending
       e(address.full_name)+' · '+e(address.address_line.replace(/\s+/g,' '))+' · Singapore '+e(address.postal_code)+'</option>').join('')+
     '</select></label><div aria-live="polite">'+cards+'</div>'+
     (livePayment?'':'<p class="notice">Use the sample card details provided for this checkout. Do not enter a real card.</p>')+
-    (checkingBenefits?'<p class="notice" role="status">'+e(benefits.error||(benefits.points?'Checking your points…':'Checking your member coupon…'))+
+    (checkingBenefits?'<p class="notice" role="status">'+e(benefits.error||'Checking your member benefits…')+
       (benefits.error?' '+go('/cart','Return to your basket'):'')+'</p>':'')+
     '<button class="btn primary"'+(checkingBenefits?' disabled':'')+'>Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
 }
@@ -277,13 +298,17 @@ export function membershipPanel(membership) {
     used:'You have used your welcome coupon.',expired:'Your welcome coupon has expired.',
     ineligible:'The welcome coupon is for your first paid order.'
   }[coupon?.status];
-  const expiry=coupon?.status==='available'
-    ?new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'}).format(new Date(coupon.expiresAt))
-    :null;
+  const expiry=coupon?.status==='available'?memberDate.format(new Date(coupon.expiresAt)):null;
+  const tier=membership.spendingTier,allowance=membership.deliveryAllowance;
   return '<section class="panel"><h2>Membership centre</h2><p>Free member</p>'+
+    (tier?'<h3>'+tierNames[tier.tier]+' spending tier</h3><p>'+cash(tier.qualifyingSpend)+
+      ' qualifying spend in the past 12 months. Earn '+(tier.multiplier/100)+' points per S$1.</p>'+
+      (tier.nextTier?'<p>'+cash(Math.max(0,tier.nextThreshold-tier.qualifyingSpend))+' to '+tierNames[tier.nextTier]+'.</p>':''):'')+
     (expiry?'<h3>Welcome coupon</h3><p>'+welcomeTerms(coupon)+'. Valid until '+e(expiry)+' (Singapore time).</p>':status?'<p>'+status+'</p>':'')+
     (membership.campaigns??[]).map(campaign=>'<h3>'+e(campaign.title)+'</h3><p>'+e(campaignAvailability(campaign))+'</p>').join('')+
-    (expiry||membership.campaigns?.length?go('/cart','Go to basket','btn outline'):'')+pointsBalance(membership.points)+'</section>';
+    (allowance?'<h3>Annual pass delivery</h3><p>'+deliveryStatus(allowance)+' This allowance period ends '+
+      e(memberDate.format(new Date(allowance.expiresAt)))+' (Singapore time).</p>':'')+
+    (expiry||membership.campaigns?.length||allowance?.available?go('/cart','Go to basket','btn outline'):'')+pointsBalance(membership.points)+'</section>';
 }
 export function account(params,membership) {
   const a=state.account;

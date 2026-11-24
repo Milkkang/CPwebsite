@@ -11,7 +11,8 @@ const path='/api/membership/annual';
 const env={
  SUPABASE_URL:'https://tfrfkvkjmaqnpxdhxumr.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fake',
  SUPABASE_SECRET_KEY:'sb_secret_fake',STRIPE_SECRET_KEY:'sk_test_fake',STRIPE_WEBHOOK_SECRET:'whsec_fake',
- TRANSACTIONAL_EMAIL_TEST_RECIPIENTS:'buyer@example.invalid',PAID_MEMBERSHIP_LAUNCH_AT:'2024-01-01T00:00:00Z'
+ TRANSACTIONAL_EMAIL_TEST_RECIPIENTS:'buyer@example.invalid',MEMBERSHIP_LAUNCH_AT:'2024-01-01T00:00:00Z',
+ MEMBERSHIP_TIERS_LAUNCH_AT:'2024-01-01T00:00:00Z',PAID_MEMBERSHIP_LAUNCH_AT:'2024-01-01T00:00:00Z'
 };
 const account={id:userId,email:'buyer@example.invalid',verified:true};
 const cookie='__Host-cvm-session='+'a'.repeat(64);
@@ -36,6 +37,11 @@ test('annual pass is off by default before phase three and reads only the signed
  },async()=>{
   for(const launch of [undefined,'2026-02-30T00:00:00Z','2999-01-01T00:00:00Z']){
    const disabled={...env,PAID_MEMBERSHIP_LAUNCH_AT:launch};
+   assert.equal((await (await call(disabled)).json()).enabled,false);
+   assert.equal((await call(disabled,{method:'POST',data:{acceptTerms:true}})).status,403);
+  }
+  for(const prerequisite of ['MEMBERSHIP_LAUNCH_AT','MEMBERSHIP_TIERS_LAUNCH_AT']){
+   const disabled={...env,[prerequisite]:undefined};
    assert.equal((await (await call(disabled)).json()).enabled,false);
    assert.equal((await call(disabled,{method:'POST',data:{acceptTerms:true}})).status,403);
   }

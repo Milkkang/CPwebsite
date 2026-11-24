@@ -1,4 +1,4 @@
-import { ApiError } from './catalog-api.mjs';
+import { ApiError, isIsolatedMembershipPreview, validSupabaseOrigin } from './catalog-api.mjs';
 const COOKIE='__Host-cvm-session';
 export const ORIGINS=new Set(['https://cpvaluemart.com','https://www.cpvaluemart.com']);
 export function isAllowedOrigin(request){
@@ -26,7 +26,7 @@ function cookieHashRequest(request) {
  return /^[a-f0-9]{64}$/.test(value)?value:null;
 }
 async function upstream(env,path,{method='GET',body,token,service=false,allowFailure=false,prefer='return=representation'}={}) {
- if(env.SUPABASE_URL!=='https://tfrfkvkjmaqnpxdhxumr.supabase.co'||!env.SUPABASE_PUBLISHABLE_KEY||!env.SUPABASE_SECRET_KEY)
+ if(!validSupabaseOrigin(env)||!env.SUPABASE_PUBLISHABLE_KEY||!env.SUPABASE_SECRET_KEY)
   throw new ApiError(503,'AUTH_UNAVAILABLE','Account service is temporarily unavailable.');
  let response;
  try { response=await fetch(env.SUPABASE_URL+path,{method,redirect:'manual',signal:AbortSignal.timeout(10000),headers:{apikey:service?env.SUPABASE_SECRET_KEY:env.SUPABASE_PUBLISHABLE_KEY,...(token?{Authorization:'Bearer '+token}:{}),'Content-Type':'application/json',Prefer:prefer},...(body===undefined?{}:{body:JSON.stringify(body)})}); }
@@ -93,8 +93,12 @@ export async function handleAuth(request,env) {
  if(['/api/auth/signup','/api/auth/login','/api/auth/recover','/api/auth/resend'].includes(path)&&!read){
   const data=await bodyJSON(request),address=email(data);await limit(request,env,path.endsWith('/login')?'login':'email',address);
   if(path.endsWith('/login')){const pass=field(data,'password',1,128);const r=await upstream(env,'/auth/v1/token?grant_type=password',{method:'POST',body:{email:address,password:pass},allowFailure:true});if(!r.ok)throw new ApiError(r.status===429?429:401,'SIGN_IN_FAILED','Email or password is incorrect, or the email is not verified.');return result({ok:true},await establish(env,r.data,false));}
-  if(path.endsWith('/signup')){const pass=password(data);const name=field(data,'name',1,80).trim();const r=await upstream(env,'/auth/v1/signup?redirect_to='+encodeURIComponent('https://cpvaluemart.com/auth/confirm'),{method:'POST',body:{email:address,password:pass,data:{display_name:name}},allowFailure:true});if(!r.ok)throw new ApiError(r.status===429?429:400,'SIGNUP_FAILED','Unable to register. Check your details or request another verification email.');}
-  else {const reset=path.endsWith('/recover');const r=await upstream(env,reset?'/auth/v1/recover?redirect_to='+encodeURIComponent('https://cpvaluemart.com/auth/reset'):'/auth/v1/resend',{method:'POST',body:reset?{email:address}:{email:address,type:'signup'},allowFailure:true});if(!r.ok&&r.status!==400)throw new ApiError(r.status===429?429:503,'EMAIL_UNAVAILABLE','Unable to send email now. Try again later.');}
+  const isolatedPreview=isIsolatedMembershipPreview(env);
+  const callbackOrigin=isolatedPreview?new URL(request.url).origin:'https://cpvaluemart.com';
+  if(path.endsWith('/signup')){const pass=password(data);const name=field(data,'name',1,80).trim();const r=await upstream(env,'/auth/v1/signup?redirect_to='+encodeURIComponent(callbackOrigin+'/auth/confirm'),{method:'POST',body:{email:address,password:pass,data:{display_name:name}},allowFailure:true});if(!r.ok)throw new ApiError(r.status===429?429:400,'SIGNUP_FAILED','Unable to register. Check your details or request another verification email.');}
+  else {const reset=path.endsWith('/recover');const endpoint=reset?'/auth/v1/recover?redirect_to='+encodeURIComponent(callbackOrigin+'/auth/reset'):
+   '/auth/v1/resend'+(isolatedPreview?'?redirect_to='+encodeURIComponent(callbackOrigin+'/auth/confirm'):'');
+   const r=await upstream(env,endpoint,{method:'POST',body:reset?{email:address}:{email:address,type:'signup'},allowFailure:true});if(!r.ok&&r.status!==400)throw new ApiError(r.status===429?429:503,'EMAIL_UNAVAILABLE','Unable to send email now. Try again later.');}
   return result({ok:true,message:'If this address is eligible, an email will arrive shortly. Check your inbox and spam folder.'},undefined,202);
  }
  if(path==='/api/auth/verify'&&!read){const data=await bodyJSON(request);const tokenHash=field(data,'token_hash',32,512);if(!/^[A-Za-z0-9_-]+$/.test(tokenHash)||!['email','recovery'].includes(data.type))bad();await limit(request,env,'verify');

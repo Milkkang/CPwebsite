@@ -36,6 +36,7 @@ cmp -s "$PG_TEST_DIR/annual-1.txt" "$PG_TEST_DIR/annual-2.txt"
 "${PSQL[@]}" -f tests/membership-database-acceptance.sql >/dev/null
 "${PSQL[@]}" -f tests/member-campaign-database-acceptance.sql >/dev/null
 "${PSQL[@]}" -f tests/membership-points-acceptance.sql >/dev/null
+"${PSQL[@]}" -f tests/membership-rollout-acceptance.sql >/dev/null
 "${PSQL[@]}" -f tests/order-refunds-database-acceptance.sql >/dev/null
 # Distinct refund requests race for one slot. Concurrent success delivery is idempotent.
 "${PSQL[@]}" -f tests/order-refund-race-fixture.sql >/dev/null

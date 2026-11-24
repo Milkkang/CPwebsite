@@ -3,7 +3,8 @@ begin;
 do $$
 declare
  buyer uuid:=gen_random_uuid(); other_buyer uuid:=gen_random_uuid(); admin uuid:=gen_random_uuid();
- address uuid:=gen_random_uuid(); checkout_id uuid; campaign uuid; credited_order uuid; expired_credit_order uuid;
+ address uuid:=gen_random_uuid(); checkout_id uuid; campaign uuid; credited_order uuid; expired_credit_order uuid; debt_address uuid:=gen_random_uuid();
+ release_by_expiry boolean; replacement uuid;
  launch timestamptz:=now()-interval '1 day'; request uuid:=gen_random_uuid(); reversal uuid:=gen_random_uuid(); result jsonb;
 begin
  insert into auth.users(id,email,email_confirmed_at) values
@@ -196,6 +197,57 @@ begin
  if public.read_member_points(buyer)->>'pending' is distinct from '29' then
   raise exception 'pre-delivery return must reduce pending points';
  end if;
+ -- A credited lot is held by a later pending checkout when its earning order is refunded.
+ insert into public.buyer_addresses(id,user_id,full_name,address_line,postal_code)
+ values(debt_address,other_buyer,'Synthetic','Synthetic','123456');
+ for release_by_expiry in select unnest(array[true,false]) loop
+  insert into public.buyer_cart_items(user_id,sku,quantity) values(other_buyer,'POINTS-B',5);
+  credited_order:=(public.create_points_order(other_buyer,debt_address,launch,true,null,null,0,15000)->>'id')::uuid;
+  perform public.attach_test_checkout(other_buyer,credited_order,'cs_live_points_debt_earning_'||release_by_expiry);
+  perform public.apply_test_payment_event('evt_points_debt_earning_'||release_by_expiry,'checkout.session.completed',true,
+   credited_order,'cs_live_points_debt_earning_'||release_by_expiry,'pi_points_debt_earning_'||release_by_expiry,15000,'sgd');
+  perform public.admin_update_order(admin,credited_order,(select version from public.orders where id=credited_order),'Shipped','Synthetic');
+  perform public.confirm_test_order_receipt(other_buyer,credited_order,(select version from public.orders where id=credited_order));
+  insert into public.buyer_cart_items(user_id,sku,quantity) values(other_buyer,'POINTS-B',1);
+  checkout_id:=(public.create_points_order(other_buyer,debt_address,launch,true,null,null,100,3290)->>'id')::uuid;
+  if release_by_expiry then perform public.attach_test_checkout(other_buyer,checkout_id,'cs_live_points_debt_hold'); end if;
+  reversal:=gen_random_uuid();
+  perform public.prepare_order_refund(admin,credited_order,(select version from public.orders where id=credited_order),
+   reversal,true,true,null);
+  perform public.resolve_order_refund(admin,credited_order,reversal,true,'re_points_debt_earning_'||release_by_expiry,'succeeded');
+  result:=public.read_member_points(other_buyer);
+  if result->>'available' is distinct from '0' or result->>'debt' is distinct from '100' then
+   raise exception 'refund took the open checkout hold or lost its debt: %',result;
+  end if;
+  if release_by_expiry then
+   perform public.apply_test_payment_event('evt_points_debt_hold_expired','checkout.session.expired',true,
+    checkout_id,'cs_live_points_debt_hold',null,3290,'sgd');
+  else
+   -- A replacement checkout can contain different SKUs from the old one.
+   update public.orders set created_at=now()-interval '6 minutes' where id=checkout_id;
+   delete from public.buyer_cart_items where user_id=other_buyer;
+   insert into public.buyer_cart_items(user_id,sku,quantity) values(other_buyer,'POINTS-A',1);
+   replacement:=(public.create_live_order(other_buyer,debt_address,null)->>'id')::uuid;
+   if (select payment_status from public.orders where id=checkout_id) is distinct from 'failed' or
+      not exists(select 1 from public.order_items where order_id=replacement and sku='POINTS-A') then
+    raise exception 'replacement checkout did not release the old order and reserve the new cart';
+   end if;
+   perform public.release_test_order(replacement);
+  end if;
+  result:=public.read_member_points(other_buyer);
+  if result->>'available' is distinct from '0' or result->>'debt' is distinct from '0' or
+     result#>>'{ledger,0,kind}' is distinct from 'debt_repaid' or result#>>'{ledger,0,points}' is distinct from '-100' then
+   raise exception 'released held points must repay the refund debt before becoming spendable: %',result;
+  end if;
+  begin
+   perform public.create_points_order(other_buyer,debt_address,launch,true,null,null,100,
+    case when release_by_expiry then 3290 else 2290 end);
+   raise exception 'a new checkout could spend revoked points';
+  exception when sqlstate 'PT409' then
+   if sqlerrm<>'POINTS_LIMIT' then raise; end if;
+  end;
+  delete from public.buyer_cart_items where user_id=other_buyer;
+ end loop;
  if has_function_privilege('authenticated','public.read_member_points(uuid)','EXECUTE') or
     has_function_privilege('anon','public.quote_points_checkout(uuid,timestamptz,boolean,text,text,integer)','EXECUTE') or
     has_table_privilege('service_role','private.membership_point_ledger','INSERT') then

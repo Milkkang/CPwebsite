@@ -108,9 +108,9 @@ begin
  perform 1 from private.membership_point_accounts where user_id=p_user for no key update;
 end $$;
 
--- A hold consumes spendable balance while the order is pending. Failed/expired
--- orders release it without changing the lot or extending its original expiry.
--- Refunds may target one originating lot even after its unused points expire.
+-- A hold consumes spendable balance while the order is pending. Releasing a
+-- hold never extends its expiry. Refunds and debt settlement may target a
+-- specific lot even after its unused points expire.
 create function private.membership_unheld_lots(p_user uuid,p_original_lot bigint default null)
 returns table(id bigint,expires_at timestamptz,points integer) language sql stable set search_path='' as $$
  select l.id,l.expires_at,(l.remaining-coalesce((
@@ -358,16 +358,89 @@ end $$;
 create function private.membership_points_multiplier(p_user uuid)
 returns integer language sql stable set search_path='' as $$ select 100 $$;
 
+create function private.release_checkout_stock(p_order uuid)
+returns void language plpgsql set search_path='' as $$
+begin
+ perform 1 from public.products p join public.order_items i on i.sku=p.sku
+ where i.order_id=p_order order by p.sku for update of p;
+ update public.products p set reserved_quantity=greatest(0,p.reserved_quantity-i.quantity),version=version+1
+ from public.order_items i where i.order_id=p_order and i.sku=p.sku;
+end $$;
+
+create or replace function public.release_test_order(p_order uuid)
+returns boolean language plpgsql security definer set search_path='' as $$
+begin
+ if not exists(select 1 from public.orders where id=p_order and payment_status='pending' for update) then return false; end if;
+ perform private.release_checkout_stock(p_order);
+ update public.orders set payment_status='failed',fulfilment_status='Cancelled',updated_at=now(),version=version+1 where id=p_order;
+ return true;
+end $$;
+
+create or replace function public.create_live_order(p_user uuid,p_address uuid,p_coupon text default null)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare created jsonb; previous_order record; order_id uuid;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('live-checkout:'||p_user,0));
+ select o.id,o.stripe_checkout_session_id,o.created_at into previous_order from public.orders o
+ where o.user_id=p_user and o.live_payment and o.payment_status='pending' for update;
+ if found then
+  if previous_order.stripe_checkout_session_id is not null or previous_order.created_at>now()-interval '5 minutes' then
+   raise exception using errcode='PT409',message='CHECKOUT_PENDING';
+  end if;
+  perform 1 from public.products p where p.sku in (
+   select i.sku from public.order_items i where i.order_id=previous_order.id
+   union select c.sku from public.buyer_cart_items c where c.user_id=p_user
+  ) order by p.sku for update of p;
+  perform private.release_checkout_stock(previous_order.id);
+ end if;
+ created:=public.create_test_order(p_user,p_address,p_coupon);
+ order_id:=(created->>'id')::uuid;
+ -- Reserve the replacement inventory before the old order's points trigger
+ -- locks the account. The former checkout stays pending until then.
+ if previous_order.id is not null then
+  update public.orders set payment_status='failed',fulfilment_status='Cancelled',updated_at=now(),version=version+1
+  where id=previous_order.id;
+ end if;
+ update public.orders set live_payment=true,expires_at=now()+interval '1 hour' where id=order_id;
+ return public.read_order_json(order_id,p_user);
+end $$;
+
+revoke all on function private.release_checkout_stock(uuid) from public,anon,authenticated,service_role;
+
 create function private.resolve_order_membership_points()
 returns trigger language plpgsql security definer set search_path='' as $$
 declare
  earning private.membership_point_earnings;
  rate integer; earned integer; applied integer; expiry timestamptz; credited_lot bigint;
+ released record; current_debt bigint; repaid integer:=0;
 begin
  if old.payment_status='pending' and new.payment_status in ('failed','expired') then
-  if new.member_points_redeemed>0 then
-   insert into private.membership_point_ledger(source,user_id,order_id,kind,points)
-   values('release/'||new.id,new.user_id,new.id,'released',new.member_points_redeemed);
+  if new.member_points_redeemed=0 then return null; end if;
+  perform private.lock_membership_point_account(new.user_id);
+  insert into private.membership_point_ledger(source,user_id,order_id,kind,points)
+  values('release/'||new.id,new.user_id,new.id,'released',new.member_points_redeemed);
+  select debt into current_debt from private.membership_point_accounts where user_id=new.user_id;
+  if current_debt>0 then
+   -- A refund may have kept these exact holds intact and recorded debt.
+   -- Pay it from the points just released while the account is still locked.
+   for released in
+    select l.id,least(h.points,l.points) as points
+    from private.membership_point_holds h
+    cross join lateral private.membership_unheld_lots(new.user_id,h.lot_id) l
+    left join private.membership_point_earnings e on e.credited_lot_id=l.id and e.remaining_points<e.original_points
+    where h.order_id=new.id and l.points>0 and (l.expires_at>now() or e.credited_lot_id is not null)
+    order by (e.credited_lot_id is null),l.expires_at,l.id
+   loop
+    applied:=least(current_debt-repaid,released.points);
+    exit when applied=0;
+    update private.membership_point_lots set remaining=remaining-applied where id=released.id;
+    repaid:=repaid+applied;
+   end loop;
+   if repaid>0 then
+    update private.membership_point_accounts set debt=debt-repaid where user_id=new.user_id;
+    insert into private.membership_point_ledger(source,user_id,order_id,kind,points)
+    values('release-debt-repayment/'||new.id,new.user_id,new.id,'debt_repaid',-repaid);
+   end if;
   end if;
   return null;
  end if;

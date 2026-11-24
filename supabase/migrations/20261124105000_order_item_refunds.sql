@@ -179,6 +179,17 @@ begin
   'earned',(select coalesce(sum(a.earned),0) from jsonb_to_recordset(op.item_allocations) as a(earned integer)));
 end $$;
 
+-- Resume the stored intent only. An unknown client request must never begin a refund.
+create function public.resume_order_refund(p_actor uuid,p_order uuid,p_request uuid,p_live boolean)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare op private.order_refunds;
+begin
+ if not exists(select 1 from public.admin_roles where user_id=p_actor) then raise exception using errcode='42501'; end if;
+ select * into op from private.order_refunds where id=p_request and order_id=p_order;
+ if not found then return null; end if;
+ return public.prepare_order_refund(p_actor,p_order,null,p_request,op.restock,p_live,op.request_items);
+end $$;
+
 create function public.resolve_order_refund(
  p_actor uuid,p_order uuid,p_request uuid,p_live boolean,p_provider text,p_status text
 ) returns boolean language plpgsql security definer set search_path='' as $$
@@ -330,9 +341,13 @@ begin
   update public.order_operations set status='aborted',completed_at=now() where order_id=p_order and action=p_action;
   return false;
  end if;
- if o.payment_status<>'pending' then raise exception using errcode='40001'; end if;
- perform public.release_test_order(p_order);
- perform public.queue_test_order_notice(p_order,'cancellation','cancel/'||p_order);
+ if o.payment_status='pending' then
+  perform public.release_test_order(p_order);
+  perform public.queue_test_order_notice(p_order,'cancellation','cancel/'||p_order);
+ elsif o.payment_status<>'failed' or o.fulfilment_status<>'Cancelled' or
+       o.stripe_checkout_session_id is distinct from p_provider then
+  raise exception using errcode='40001';
+ end if;
  update public.order_operations set status='completed',provider_id=p_provider,completed_at=now() where order_id=p_order and action=p_action;
  return true;
 end $$;
@@ -340,8 +355,10 @@ end $$;
 revoke all on function private.legacy_refund_reduction(integer,bigint,integer),
  private.order_refund_allocations(public.orders,jsonb),
  public.prepare_order_refund(uuid,uuid,integer,uuid,boolean,boolean,jsonb),
+ public.resume_order_refund(uuid,uuid,uuid,boolean),
  public.resolve_order_refund(uuid,uuid,uuid,boolean,text,text) from public,anon,authenticated;
 grant execute on function public.prepare_order_refund(uuid,uuid,integer,uuid,boolean,boolean,jsonb),
+ public.resume_order_refund(uuid,uuid,uuid,boolean),
  public.resolve_order_refund(uuid,uuid,uuid,boolean,text,text) to service_role;
 
 commit;

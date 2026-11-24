@@ -38,8 +38,18 @@ begin
  exception when sqlstate 'PT409' then
   if sqlerrm<>'REFUND_REQUEST_CHANGED' then raise; end if;
  end;
+ result:=public.resume_order_refund(owner,order_id,request,false);
+ if result->>'completed' is distinct from 'false' or result->>'amount' is distinct from '1' then
+  raise exception 'pending refund could not be resumed: %',result;
+ end if;
  perform public.resolve_order_refund(owner,order_id,request,false,'re_first_cent','succeeded');
  current_version:=current_version+1;
+ result:=public.resume_order_refund(owner,order_id,request,false);
+ if result->>'completed' is distinct from 'true' or result->>'amount' is distinct from '1' or
+    public.resume_order_refund(owner,gen_random_uuid(),request,false) is not null or
+    public.resume_order_refund(owner,order_id,gen_random_uuid(),false) is not null then
+  raise exception 'resume did not match the exact original refund: %',result;
+ end if;
  request:=gen_random_uuid();
  result:=public.prepare_order_refund(owner,order_id,current_version,request,true,false,'[{"sku":"REFUND-A","quantity":1}]');
  if result->>'amount' is distinct from '0' then raise exception 'zero-cash unit is incorrect: %',result; end if;
@@ -91,6 +101,7 @@ begin
   raise exception 'final item return did not close an entirely refunded order';
  end if;
  if has_function_privilege('authenticated','public.prepare_order_refund(uuid,uuid,integer,uuid,boolean,boolean,jsonb)','EXECUTE') or
+    has_function_privilege('authenticated','public.resume_order_refund(uuid,uuid,uuid,boolean)','EXECUTE') or
     has_function_privilege('anon','public.resolve_order_refund(uuid,uuid,uuid,boolean,text,text)','EXECUTE') or
     has_table_privilege('service_role','private.order_refunds','INSERT') then
   raise exception 'refund operation access leaked outside its server boundary';

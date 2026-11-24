@@ -109,3 +109,56 @@ test('admin auth forms retain typed values when the tab regains focus',async t=>
  await settle();
  assert.equal(app.form.email,'recovery@example.invalid');
 });
+
+test('an ambiguous refund is reconciled by its original opaque request ID after reload',async t=>{
+ const listeners=new Map(),storage=new Map();
+ const account={id:'fixture-refund-admin',name:'Synthetic Admin'};
+ const order={id:'99999999-9999-4999-8999-999999999999',number:'CVM-REFUND-1',version:1,
+  createdAt:'2026-11-24T00:00:00Z',email:'synthetic-recipient@example.invalid',name:'Synthetic Buyer',
+  address:{name:'Synthetic Buyer',line:'Synthetic Address',postal:'123456'},fulfilmentStatus:'Processing',
+  paymentStatus:'paid',items:[],subtotal:1000,shipping:0,discount:0,total:1000};
+ const app={innerHTML:'',querySelector(){return null;}};
+ const dialog={open:false};
+ const document={body:{classList:{toggle(){}}},getElementById:id=>id==='app'?app:id==='refund-restock'?{checked:false}:dialog,
+  addEventListener:(name,listener)=>listeners.set(name,listener)};
+ const window={addEventListener(){},confirm(){return true;}};
+ const sessionStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
+ for(const [name,value] of Object.entries({location:new URL('https://cpvaluemart.com/#/admin/orders/'+order.number),document,window,sessionStorage,BroadcastChannel:undefined,localStorage:{getItem:()=>null,removeItem(){},setItem(){}}})){
+  const descriptor=Object.getOwnPropertyDescriptor(globalThis,name);
+  Object.defineProperty(globalThis,name,{value,configurable:true,writable:true});
+  t.after(()=>descriptor?Object.defineProperty(globalThis,name,descriptor):delete globalThis[name]);
+ }
+ const calls=[];
+ const responses={
+  '/api/auth/session':{account,isAdmin:true,recoveryOnly:false},'/api/orders':{orders:[]},
+  '/api/shopping':{cart:[],saved:[],recent:[]},'/api/admin/products':{products:[]},'/api/admin/config':{coupons:[]},
+  '/api/admin/access':{},'/api/admin/email-jobs':{jobs:[]},'/api/admin/search':{searches:[]},'/api/admin/categories':{categories:[]},'/api/admin/traffic':{}};
+ t.mock.method(globalThis,'fetch',async(path,options)=>{
+  if(path==='/api/admin/orders')return Response.json({orders:[order]});
+  if(path==='/api/admin/order-actions'){
+   calls.push(JSON.parse(options.body));
+   if(calls.length===1){Object.assign(order,{version:2,paymentStatus:'refunded',fulfilmentStatus:'Cancelled',refundedCents:1000});throw Error('Connection lost');}
+   return Response.json({refund:{amount:1000}});
+  }
+  assert.ok(path in responses,path);
+  return Response.json(responses[path]);
+ });
+ const waitFor=async pattern=>{
+  for(let i=0;i<30&&!pattern.test(app.innerHTML);i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.match(app.innerHTML,pattern);
+ };
+ const click=orderAction=>listeners.get('click')({target:{closest:()=>({dataset:{orderAction,orderId:order.number}})}});
+ await import('../dist/app.js?refund-initial');
+ await waitFor(/data-order-action="refund"/);
+ await click('refund');
+ assert.match(calls[0].requestId,/^[0-9a-f-]{36}$/);
+ assert.deepEqual([...storage.values()],[calls[0].requestId]);
+ assert.doesNotMatch([...storage.keys()].join(),/fixture-refund-admin|99999999|Synthetic/i);
+ app.innerHTML='';
+ await import('../dist/app.js?refund-reload');
+ await waitFor(/data-order-action="resume_refund"/);
+ await click('resume_refund');
+ assert.deepEqual(calls[1],{orderId:order.id,action:'resume_refund',requestId:calls[0].requestId});
+ assert.equal(storage.size,0);
+ assert.doesNotMatch(app.innerHTML,/data-order-action="resume_refund"/);
+});

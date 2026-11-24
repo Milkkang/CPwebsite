@@ -51,6 +51,26 @@ test('refund retries use a stable provider key and reconcile a lost database res
   assert.equal(finishes,2);assert.deepEqual(keys,['refund/'+requestId]);
  });
 });
+test('resume checks the exact refund request even after the order changed, and never starts an unknown refund',async()=>{
+ for(const completed of [null,false,true])await mock(async(url,options)=>{
+  const path=String(url);
+  if(path.includes('resolve_web_session'))return Response.json({account,isAdmin:true});
+  if(path.endsWith('/resume_order_refund')){
+   assert.deepEqual(JSON.parse(options.body),{p_actor:account.id,p_order:id,p_request:requestId,p_live:false});
+   return Response.json(completed===null?null:{...preparedRefund,completed,amount:0,restored:50});
+  }
+  assert.equal(completed,false);
+  assert.match(path,/resolve_order_refund$/);
+  assert.deepEqual(JSON.parse(options.body),{p_actor:account.id,p_order:id,p_request:requestId,p_live:false,p_provider:null,p_status:'no_cash'});
+  return Response.json(true);
+ },async()=>{
+  const response=await call('/api/admin/order-actions',{orderId:id,action:'resume_refund',requestId});
+  assert.equal(response.status,completed===null?409:200);
+  const result=await response.json();
+  if(completed===null)assert.equal(result.error.code,'REFUND_NOT_FOUND');
+  else assert.deepEqual(result.refund,{amount:0,pointsRestored:50,pointsClawedBack:0});
+ });
+});
 test('pending or mismatched Stripe refunds leave the database refund unresolved',async()=>{
  for(const [record,code] of [
   [{...stripeRefund,status:'pending'},'REFUND_PENDING'],

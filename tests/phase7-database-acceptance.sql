@@ -41,6 +41,28 @@ begin
  perform public.finish_test_order_operation(u,pending_order,'cancel','cs_test_operation_cancel');
  perform public.finish_test_order_operation(u,pending_order,'cancel','cs_test_operation_cancel');
  if (select reserved_quantity from public.products where sku='OP-1')<>0 or (select stock from public.products where sku='OP-1')<>12 then raise exception 'cancellation stock corrupted';end if;
+ -- The signed Stripe expiry can win the race while the admin cancellation waits for Stripe.
+ insert into public.orders(user_id,address_id,subtotal_cents,shipping_cents,discount_cents,total_cents,stripe_checkout_session_id)
+ values(u,a,2000,0,0,2000,'cs_test_cancel_expiry_race') returning id into pending_order;
+ insert into public.order_items(order_id,sku,product_name,variant_name,unit_cents,quantity) values(pending_order,'OP-1','Operation fixture','One',1000,2);
+ update public.products set reserved_quantity=2 where sku='OP-1';
+ perform public.prepare_test_order_operation(u,pending_order,1,'cancel',false);
+ op:=public.apply_test_payment_event('evt_test_cancel_expiry_race','checkout.session.expired',false,
+  pending_order,'cs_test_cancel_expiry_race',null,2000,'sgd');
+ if op->>'outcome' is distinct from 'released' then raise exception 'expiry did not win cancellation race: %',op; end if;
+ begin
+  perform public.finish_test_order_operation(u,pending_order,'cancel','cs_test_wrong_cancel_expiry');
+  raise exception 'cancellation accepted an unrelated Stripe session';
+ exception when serialization_failure then null;
+ end;
+ if not public.finish_test_order_operation(u,pending_order,'cancel','cs_test_cancel_expiry_race') or
+    not public.finish_test_order_operation(u,pending_order,'cancel','cs_test_cancel_expiry_race') then
+  raise exception 'matching expiry did not complete cancellation idempotently';
+ end if;
+ if (select reserved_quantity from public.products where sku='OP-1')<>0 or
+    (select count(*) from public.email_jobs where order_id=pending_order and kind='cancellation')<>1 then
+  raise exception 'matching expiry repeated cancellation side effects';
+ end if;
  -- A failing second import row must roll back the first row and stock ledger.
  select stock into before_stock from public.products where sku='OP-1';
  begin

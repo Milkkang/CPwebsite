@@ -158,3 +158,25 @@ test('returning members can find a campaign in their account and choose it in th
   assert.doesNotMatch(html,/Remove welcome coupon/);
  } finally {Object.assign(state,previous);}
 });
+
+test('membership centre shows the next tier and checkout itemizes annual delivery savings',()=>{
+ const previous={account:state.account,cart:state.cart,coupon:state.coupon};
+ try {
+  state.account={id:'member',email:'delivery@example.invalid',verified:true};
+  const product=state.products.find(row=>row.status==='Published');
+  state.cart={[product.id]:1};
+  state.coupon='';
+  const membership={enabled:true,member:true,
+   spendingTier:{tier:'silver',qualifyingSpend:32500,multiplier:125,nextTier:'gold',nextThreshold:80000},
+   deliveryAllowance:{available:true,status:'available',minimum:3000,amount:390,expiresAt:'2026-12-24T00:00:00Z'}};
+  const centre=account(new URLSearchParams(),membership);
+  assert.match(centre,/Silver spending tier[\s\S]*S\$325\.00[\s\S]*1\.25 points per S\$1[\s\S]*S\$475\.00 to Gold/);
+  assert.match(centre,/Save up to S\$3\.90[\s\S]*S\$30\.00[\s\S]*24 Dec 2026/);
+  assert.match(cart(null,{membership}),/Use delivery allowance/);
+  const addresses=[{id:'example',full_name:'Member',address_line:'Example',postal_code:'112233',is_default:true}];
+  assert.match(checkout(addresses,true,{livePayment:true,benefits:{delivery:true}}),/disabled>Continue to Stripe/);
+  const quote={subtotal:3200,shipping:110,discount:500,couponDiscount:300,pointsDiscount:200,total:2810,deliveryAllowance:{discount:390}};
+  const bill=checkout(addresses,true,{livePayment:true,benefits:{delivery:true,quote}});
+  assert.match(bill,/Delivery<\/dt><dd>S\$5\.00[\s\S]*Annual pass delivery<\/dt><dd>−S\$3\.90[\s\S]*Total<\/dt><dd>S\$28\.10/);
+ } finally {Object.assign(state,previous);}
+});

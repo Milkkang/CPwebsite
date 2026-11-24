@@ -2,7 +2,7 @@ import {pointsBasketControl} from './membership-points.js';
 import {productFileCsv} from './import-file.js';
 import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
 import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
-import {href,home,shopFrame,catalog,detail,cart,checkout,account,membershipPanel,welcomeBasketControl,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
+import {href,home,shopFrame,catalog,detail,cart,checkout,account,membershipPanel,welcomeBasketControl,deliveryBasketControl,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,canShipOrder,canDeliverOrder,extraVariant,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos} from './admin.js';
 import {adminCampaignEditor,adminCampaignInput,adminCampaignPanel} from './member-campaigns.js';
 import {initProductEditing} from './product-editing.js';
@@ -18,6 +18,26 @@ let storefront={key:'',data:null,error:null}, pendingStorefront='';
 let storefrontDeliveryLoaded=false;
 let adminProductsLoaded=false,adminProductsLoading=false,adminProductsError='';
 const submittingOrderActions=new Set();
+const refundRequests=new Map();
+async function refundRequestKey(owner,orderId){
+ const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(owner+'/'+orderId));
+ return 'cvm-refund/'+Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+function readRefundRequest(key){
+ const request=refundRequests.get(key);
+ if(request)return request;
+ try{
+  const id=sessionStorage.getItem(key);
+  if(id)return {id,reenter:false};
+ }catch{}
+ return null;
+}
+function saveRefundRequest(key,request){
+ if(request)refundRequests.set(key,request);else refundRequests.delete(key);
+ try{
+  if(request)sessionStorage.setItem(key,request.id);else sessionStorage.removeItem(key);
+ }catch{}
+}
 let campaignAdmin;
 async function loadAdminCampaigns(owner){
  const check={owner};
@@ -30,11 +50,12 @@ let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersOwner='';
 let returnSession='',checkoutReturn,ordersRequest;
 let checkoutAccess;
-let membershipCheck,welcomeQuote,welcomeSelected=false,selectedPoints=0;
+let membershipCheck,welcomeQuote,welcomeSelected=false,selectedPoints=0,deliverySelected=false;
+const hasSelectedBenefits=()=>Boolean(welcomeSelected||selectedPoints||deliverySelected);
 let pointsLookup,pointsSearch,pointsAdjustment;
 function checkoutDiscount(){
  return {...(welcomeSelected?{memberCoupon:welcomeSelected}:{coupon:state.coupon||''}),
-  ...(selectedPoints?{points:selectedPoints}:{})};
+  ...(selectedPoints?{points:selectedPoints}:{}),...(deliverySelected?{deliveryAllowance:true}:{})};
 }
 function loadMembership(owner,path){
  const check={owner,path};
@@ -49,6 +70,8 @@ function loadMembership(owner,path){
   if(basket&&!welcomeSelected)basket.innerHTML=welcomeBasketControl({membership:data});
   const points=app.querySelector('[data-points-basket]');
   if(points)points.innerHTML=pointsBasketControl({membership:data,points:selectedPoints,quote:welcomeQuote?.quote,error:welcomeQuote?.error});
+  const delivery=app.querySelector('[data-delivery-basket]');
+  if(delivery&&!deliverySelected)delivery.innerHTML=deliveryBasketControl({membership:data});
  }).catch(()=>{});
 }
 function renderWelcomeQuote(path){
@@ -139,6 +162,10 @@ async function loadAdminProducts() {
   adminProductsLoading=true;adminProductsError='';
   try{
     const [result,config,orderResult,emailResult,searchResult,categoryResult,trafficResult]=await Promise.all([authRequest('/api/admin/products'),authRequest('/api/admin/config'),authRequest('/api/admin/orders'),authRequest('/api/admin/email-jobs'),authRequest('/api/admin/search'),authRequest('/api/admin/categories'),authRequest('/api/admin/traffic').then(data=>({data})).catch(error=>({error:error.message}))]);
+    const adminOrders=await Promise.all(orderResult.orders.map(async row=>{
+      const refundKey=await refundRequestKey(owner,row.id);
+      return {...mapOrder(row),refundKey,refundRequest:readRefundRequest(refundKey),emailJobs:emailResult.jobs.filter(job=>job.orderId===row.id)};
+    }));
     if(auth.account?.id!==owner||!auth.isAdmin)return;
     state.products=result.products.map(row=>listingFromApi(row,{admin:true}));
     state.adminCategories=categoryResult.categories;
@@ -153,7 +180,7 @@ async function loadAdminProducts() {
     deliveryVersion=config.delivery?.version??0;
     state.coupons=config.coupons.map(row=>({code:row.code,type:row.kind,amount:row.amount,min:row.minimum_cents,active:row.active}));
     couponVersions=new Map(config.coupons.map(row=>[row.code,row.version]));
-    state.adminOrders=orderResult.orders.map(row=>({...mapOrder(row),emailJobs:emailResult.jobs.filter(job=>job.orderId===row.id)}));
+    state.adminOrders=adminOrders;
     adminProductsLoaded=true;
   }catch(error){adminProductsError=error.message;adminProductsLoaded=false;}
   finally{adminProductsLoading=false;render();}
@@ -401,9 +428,10 @@ function render({scroll=false,refreshProductEditor=false}={}) {
   if(!memberPage||membershipCheck?.path!==path||membershipCheck?.owner!==state.account?.id)membershipCheck=undefined;
   if(welcomeQuote?.path!==path||welcomeQuote?.owner!==state.account?.id)welcomeQuote=undefined;
   if(memberPage&&!membershipCheck)loadMembership(state.account.id,path);
-  if(memberPage&&!shoppingLoading&&(welcomeSelected||selectedPoints)&&['cart','checkout'].includes(key)&&
+  if(memberPage&&!shoppingLoading&&hasSelectedBenefits()&&['cart','checkout'].includes(key)&&
      !welcomeQuote&&Object.keys(state.cart).length&&!checkoutAccess?.pending)loadWelcomeQuote(state.account.id,path);
-  const benefits={membership:membershipCheck?.data,selected:welcomeSelected,points:selectedPoints,quote:welcomeQuote?.quote,error:welcomeQuote?.error};
+  const benefits={membership:membershipCheck?.data,selected:welcomeSelected,points:selectedPoints,delivery:deliverySelected,
+    quote:welcomeQuote?.quote,error:welcomeQuote?.error};
   let body='';
   if(publicCatalog&&!remote) body='<section class="empty" role="status"><h2>Loading catalog…</h2></section>';
   else if(publicCatalog&&remote.error) body=storefrontFailure(remote.error);
@@ -628,19 +656,21 @@ document.addEventListener('submit', async event=>{
     case 'checkout-form': {
       const owner=auth.account?.id;
       const discount=checkoutDiscount();
-      if(welcomeSelected||selectedPoints){
+      if(hasSelectedBenefits()){
         if(!welcomeQuote?.quote)break;
         discount.quotedTotal=welcomeQuote.quote.total;
+        if(deliverySelected)discount.deliveryMonth=welcomeQuote.quote.deliveryAllowance?.month;
       }
       const button=event.submitter??form.querySelector('button');if(button)button.disabled=true;
       const status=form.querySelector('[data-checkout-status]');if(status){status.hidden=false;status.textContent='Opening Stripe checkout…';}
       try{const result=await authRequest('/api/checkout/session',{addressId:String(f.addressId),...discount});
         if(owner!==auth.account?.id||auth.recoveryOnly)return;
         if(typeof result.checkoutUrl!=='string'||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Checkout could not be verified.');
-        welcomeSelected=false;selectedPoints=0;welcomeQuote=undefined;membershipCheck=undefined;
+        welcomeSelected=false;selectedPoints=0;deliverySelected=false;welcomeQuote=undefined;membershipCheck=undefined;
         location.assign(result.checkoutUrl);return;
       }catch(problem){error=problem.message;if(problem.code==='CHECKOUT_PENDING'){checkoutAccess=undefined;render();}
-        else if((welcomeSelected||selectedPoints)&&['CART_CHANGED','WELCOME_MINIMUM','WELCOME_UNAVAILABLE','CAMPAIGN_MINIMUM','CAMPAIGN_UNAVAILABLE','POINTS_LIMIT','POINTS_UNAVAILABLE'].includes(problem.code)){
+        else if(hasSelectedBenefits()&&['CART_CHANGED','WELCOME_MINIMUM','WELCOME_UNAVAILABLE','CAMPAIGN_MINIMUM','CAMPAIGN_UNAVAILABLE','POINTS_LIMIT','POINTS_UNAVAILABLE',
+          'DELIVERY_ALLOWANCE_UNAVAILABLE','DELIVERY_ALLOWANCE_MINIMUM','DELIVERY_ALREADY_FREE','DELIVERY_ALLOWANCE_MINIMUM_PAYMENT'].includes(problem.code)){
           membershipCheck=undefined;welcomeQuote=undefined;loadMemberShopping().catch(()=>render());
         }
         if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
@@ -697,6 +727,10 @@ document.addEventListener('click', async event=>{
   if(!button) return;
   const data=button.dataset;
   if('removePoints' in data){selectedPoints=0;welcomeQuote=undefined;render();return;}
+  if('deliveryAllowance' in data){
+    if(!deliverySelected&&!membershipCheck?.data?.deliveryAllowance?.available)return;
+    deliverySelected=!deliverySelected;welcomeQuote=undefined;render();return;
+  }
   if('welcomeCoupon' in data||'memberCampaign' in data){
     const chosen=data.memberCampaign??'welcome';
     const available=chosen==='welcome'?membershipCheck?.data?.welcome?.status==='available':
@@ -811,27 +845,32 @@ document.addEventListener('click', async event=>{
     const order=state.adminOrders.find(row=>row.id===data.orderId);
     if(!order?.backendId||submittingOrderActions.has(order.backendId))return;
     const pending=data.orderAction==='retry_refund'?order.pendingRefund:null;
-    const action=pending?(pending.items?'refund_items':'refund'):data.orderAction;
+    const resumeId=data.orderAction==='resume_refund'?order.refundRequest?.id:pending?.requestId;
+    if(data.orderAction==='resume_refund'&&!resumeId||data.orderAction==='retry_refund'&&!pending)return;
+    const action=resumeId?'resume_refund':pending?'refund':data.orderAction;
     const restock=pending?.restock??Boolean(document.getElementById('refund-restock')?.checked);
-    let items=pending?.items;
-    if(action==='refund_items'&&!pending){
+    let items;
+    if(action==='refund_items'){
       const quantities=[...document.querySelectorAll('#refund-options [data-refund-sku]')];
       if(quantities.some(input=>!input.reportValidity()))return;
       items=quantities.filter(input=>Number(input.value)>0).map(input=>({sku:input.dataset.refundSku,quantity:Number(input.value)}));
       if(!items.length){message('Enter a quantity for at least one item.');return;}
     }
-    const prompt=action==='cancel'?'Cancel this unpaid order?':pending?'Retry this pending refund?':
+    const prompt=action==='cancel'?'Cancel this unpaid order?':pending||resumeId?'Resume the previous refund?':
       (action==='refund_items'?'Refund the selected items':'Refund the remaining payment and close the order')+
       (restock?' with stock returned?':' without returning stock?');
     if(!window.confirm(prompt))return;
-    const payload={orderId:order.backendId,version:order.version,action,restock};
-    if(action!=='cancel')payload.requestId=pending?pending.requestId:crypto.randomUUID();
-    if(action==='refund_items')payload.items=items;
+    const requestId=resumeId??(action==='cancel'||pending?null:order.refundRequest?.id??crypto.randomUUID());
+    const payload=resumeId?{orderId:order.backendId,action,requestId}:
+      {orderId:order.backendId,version:order.version,action,restock,...(requestId?{requestId}:{}),...(items?{items}:{})};
     const owner=auth.account?.id;
+    if(requestId)saveRefundRequest(order.refundKey,{id:requestId,reenter:false});
     submittingOrderActions.add(order.backendId);
     button.disabled=true;
     try{
       const result=await authRequest('/api/admin/order-actions',payload);
+      if(requestId&&!Number.isSafeInteger(result?.refund?.amount))throw Error('The refund result is unavailable. Resume the same refund to check its status.');
+      if(requestId)saveRefundRequest(order.refundKey,null);
       if(auth.account?.id!==owner||!auth.isAdmin)return;
       adminProductsLoaded=false;
       await loadAdminProducts();
@@ -841,6 +880,10 @@ document.addEventListener('click', async event=>{
         (refund.pointsRestored?' '+refund.pointsRestored+' points restored.':'')+
         (refund.pointsClawedBack?' '+refund.pointsClawedBack+' points deducted.':''):'Order updated.');
     }catch(error){
+      if(requestId){
+        if(error.code==='REFUND_FAILED'||error.code==='REFUND_IN_PROGRESS')saveRefundRequest(order.refundKey,null);
+        if(error.code==='REFUND_NOT_FOUND')saveRefundRequest(order.refundKey,{id:requestId,reenter:true});
+      }
       if(auth.account?.id!==owner||!auth.isAdmin)return;
       adminProductsLoaded=false;
       await loadAdminProducts();
@@ -921,7 +964,7 @@ let lastSignedInAccount;
 setAuthListener(()=>{
  const owner=auth.recoveryOnly?undefined:auth.account?.id;
  if(owner!==lastSignedInAccount){
-  membershipCheck=undefined;welcomeQuote=undefined;welcomeSelected=false;selectedPoints=0;
+  membershipCheck=undefined;welcomeQuote=undefined;welcomeSelected=false;selectedPoints=0;deliverySelected=false;
   if(lastSignedInAccount){returnSession='';checkoutReturn=undefined;}
   lastSignedInAccount=owner;
   state.orders=[];state.adminOrders=[];ordersOwner='';ordersRequest=undefined;

@@ -5,22 +5,15 @@ const endpoint='/api/membership/annual';
 const uuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const fee=1990;
 
-function launchEnabled(env){
- const value=env.PAID_MEMBERSHIP_LAUNCH_AT;
- if(typeof value!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(value))return false;
- const date=new Date(value);
- return Number.isFinite(date.getTime())&&date.toISOString()===value.replace('Z','.000Z')&&date.getTime()<=Date.now();
-}
-
-export async function handlePaidMembership(request,env,{checkoutAvailable,stripeReady,liveMode,stripe,stripeRead}){
+export async function handlePaidMembership(request,env,{enabled,checkoutAvailable,stripeReady,liveMode,stripe,stripeRead}){
  if(!['GET','POST'].includes(request.method))throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
  if(request.method==='POST'&&!isAllowedOrigin(request))throw new ApiError(403,'INVALID_ORIGIN','Reload this page before trying again.');
  const who=await identity(request,env);
  const owner=who.account.id;
  const live=liveMode(env);
- const enabled=launchEnabled(env)&&who.account.verified===true;
+ const memberEnabled=enabled&&who.account.verified===true;
  if(request.method==='GET'){
-  if(!enabled)return {status:200,data:{enabled:false,accountId:owner}};
+  if(!memberEnabled)return {status:200,data:{enabled:false,accountId:owner}};
   const purchases=new URL(request.url).searchParams.getAll('purchase_id');
   if(purchases.length>1||purchases.length===1&&!uuid.test(purchases[0]))throw new ApiError(400,'INVALID_PURCHASE','Invalid annual pass reference.');
   const {data}=await db(env,'rpc/read_paid_membership',{method:'POST',
@@ -29,7 +22,7 @@ export async function handlePaidMembership(request,env,{checkoutAvailable,stripe
   return {status:200,data:{...data,enabled:true,available:stripeReady(env)&&await checkoutAvailable(who,env),
    accountId:owner,fee,termMonths:12,testMode:!live}};
  }
- if(!enabled||!stripeReady(env)||!await checkoutAvailable(who,env))
+ if(!memberEnabled||!stripeReady(env)||!await checkoutAvailable(who,env))
   throw new ApiError(403,'ANNUAL_PASS_UNAVAILABLE','Annual pass checkout is unavailable.');
  const data=await bodyJSON(request);
  if(data.acceptTerms!==true)throw new ApiError(400,'ANNUAL_PASS_TERMS_REQUIRED','Review and accept the annual pass terms.');
