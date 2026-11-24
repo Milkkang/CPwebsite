@@ -4,7 +4,8 @@ import {readFile} from 'node:fs/promises';
 import {resolve,extname} from 'node:path';
 const root=resolve('dist');
 const category={id:'acceptance',name:'QA Products',published:true,sort_order:0,version:1};
-const product={id:'QA-1',sku:'QA-1',name:'QA Product',variant_name:'Standard',brand:'QA Brand',category_id:category.id,description:'Synthetic acceptance fixture',keywords:'QA',status:'Published',featured:true,image_url:'/logo.png',original_image_url:'https://example.invalid/image.png',r2_image_url:'https://example.invalid/image.png',price_cents:250,stock:10,available_quantity:10,min_quantity:1,version:1};
+const otherCategory={...category,id:'qa-other',name:'QA Other'};
+const product={id:'QA-1',sku:'QA-1',name:'QA Product',variant_name:'Standard',brand:'QA Brand',category_id:category.id,description:'Synthetic acceptance fixture',keywords:'QA',status:'Published',featured:true,image_url:'https://example.invalid/image.png',original_image_url:'https://example.invalid/image.png',r2_image_url:'https://example.invalid/image.png',price_cents:250,stock:10,available_quantity:10,min_quantity:1,version:1};
 const account={id:'11111111-1111-4111-8111-111111111111',email:'qa@example.invalid',name:'QA Fixture',verified:true};
 let offline=false;const products=Array.from({length:Number(process.env.CP_QA_ROWS)||1},(_,i)=>({...product,id:'QA-'+(i+1),sku:'QA-'+(i+1),name:'QA Product '+(i+1)}));
 const orders=[{id:'99999999-9999-4999-8999-999999999999',number:'CVM-QA',paymentStatus:'paid',fulfilmentStatus:'Processing',tracking:'',subtotal:500,shipping:0,discount:0,total:500,createdAt:new Date().toISOString(),paidAt:new Date().toISOString(),version:1,email:account.email,name:account.name,address:{name:'Synthetic',line:'Synthetic address',postal:'123456'},items:[{sku:'QA-1',name:'QA Product',option:'Standard',price:250,qty:2}]}];
@@ -20,16 +21,21 @@ createServer(async(req,res)=>{
   if(url.pathname==='/api/auth/session')return json({account,isAdmin:true,recoveryOnly:false});
   if(url.pathname==='/api/admin/access')return json({account,isAdmin:true});
   if(url.pathname==='/api/admin/products'){
-   if(req.method==='POST'){const p=products.find(p=>p.sku===body.sku);if(!p||p.version!==body.version)return json({error:{message:'Version conflict'}},409);Object.assign(p,body.fields);if(body.stock!==undefined)p.stock=body.stock;p.version++;return json({product:p});}
+   if(req.method==='POST'){const p=products.find(p=>p.sku===body.sku);if(!p||p.version!==body.version)return json({error:{code:'VERSION_CONFLICT',message:'Version conflict'}},409);Object.assign(p,body.fields);if(body.stock!==undefined)p.stock=body.stock;p.version++;return json({product:p});}
    return json({products});
   }
-  if(url.pathname==='/api/admin/import')return json({count:body.rows.length});
+  if(url.pathname==='/api/admin/import'){
+   const matches=body.rows.map(row=>products.find(p=>p.sku===row.sku&&p.version===row.version));
+   if(matches.some(p=>!p))return json({error:{code:'IMPORT_REJECTED',message:'Version conflict'}},409);
+   matches.forEach((p,i)=>Object.assign(p,body.rows[i].fields,{stock:body.rows[i].stock,version:p.version+1}));
+   return json({count:matches.length});
+  }
   if(url.pathname==='/api/admin/orders')return json({orders});
   if(url.pathname==='/api/orders')return json({orders});
   if(url.pathname==='/api/admin/order-actions')return json({ok:true,testMode:true});
   if(url.pathname==='/api/admin/email-jobs')return json({jobs:[]});
   if(url.pathname==='/api/admin/search')return json({searches:[{term:'qa',searches:3,misses:0}]});
-  if(url.pathname==='/api/admin/categories')return json({categories:[category]});
+  if(url.pathname==='/api/admin/categories')return json({categories:[category,otherCategory]});
   if(url.pathname==='/api/admin/traffic')return json({traffic:[{day:'2026-11-20',visit_sessions:12,cart_sessions:3}]});
   if(url.pathname==='/api/traffic')return json({recorded:true},202);
   if(url.pathname==='/api/categories')return json({categories:[category]});
