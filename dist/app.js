@@ -1,7 +1,7 @@
 import {productFileCsv} from './import-file.js';
 import {auth,authForms,adminGate,profilePanel,passwordPanel,addressesPanel,loadAddresses,deliveryAddresses,authRequest,submitAuth,signOut,refreshSession,setAuthListener} from './auth.js';
 import {state,save,reset,escape as e,findProduct,getVariant,totals,matching,logSearch,categories,imageUrl,rememberProduct,confirmBuyerReceipt,reviewItem,saveBuyerReview,syncAutoReceipts,repurchaseOrder} from './store.js';
-import {href,home,shopFrame,catalog,detail,cart,checkout,account,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
+import {href,home,shopFrame,catalog,detail,cart,checkout,account,membershipPanel,welcomeBasketControl,orders,recentlyViewedPage,buyerReviewDialog,confirmation,allCategories,savedPage,offers,info,missing} from './shop.js';
 import {adminPage,canShipOrder,canDeliverOrder,extraVariant,couponEditor,storeCoupon,storeProduct,saveFulfilment,saveSettings,saveHomepage,exportData,exportRevenueReport,revenueDateError,importProducts,prepareProductImport,bulkUpdate,refreshEditorPhotos} from './admin.js';
 import {initProductEditing} from './product-editing.js';
 import {listingFromApi,catalogRequest,catalogQuery,isNewProductView} from './catalog-client.js';
@@ -17,6 +17,46 @@ let homepageVersion=0,deliveryVersion=0,couponVersions=new Map();
 let ordersOwner='';
 let returnSession='',checkoutReturn,ordersRequest;
 let checkoutAccess;
+let membershipCheck,welcomeQuote,welcomeSelected=false;
+function loadMembership(owner,path){
+ const check={owner,path};
+ membershipCheck=check;
+ authRequest('/api/membership').then(data=>{
+  if(membershipCheck!==check||data.accountId!==owner||auth.account?.id!==owner||route().path!==path)return;
+  check.data=data;
+  if(!data.enabled||!data.member)return;
+  const centre=app.querySelector('[data-membership-centre]');
+  if(centre){centre.innerHTML=membershipPanel(data);centre.hidden=false;}
+  const basket=app.querySelector('[data-welcome-basket]');
+  if(basket&&!welcomeSelected)basket.innerHTML=welcomeBasketControl({membership:data});
+ }).catch(()=>{});
+}
+function renderWelcomeQuote(path){
+ const selector=path==='/cart'?'#coupon-form input[name="code"]':'#checkout-form select[name="addressId"]';
+ const previous=app.querySelector(selector);
+ const focused=previous&&previous===document.activeElement;
+ const selection=focused&&path==='/cart'?[previous.selectionStart,previous.selectionEnd]:null;
+ render();
+ const current=app.querySelector(selector);
+ if(!previous||!current)return;
+ if(path==='/cart')current.value=previous.value;
+ else if([...current.options].some(option=>option.value===previous.value)){
+  current.value=previous.value;
+  current.dispatchEvent(new Event('change',{bubbles:true}));
+ }
+ if(focused)current.focus();
+ if(selection)current.setSelectionRange(...selection);
+}
+function loadWelcomeQuote(owner,path){
+ const check={owner,path};
+ welcomeQuote=check;
+ authRequest('/api/checkout/quote',{memberCoupon:'welcome'}).then(data=>{
+  if(data.accountId!==owner)throw Error('Your account changed. Refresh your basket before checking out.');
+  check.quote=data;
+ })
+  .catch(error=>{check.error=error.message;})
+  .finally(()=>{if(welcomeQuote===check&&auth.account?.id===owner&&route().path===path)renderWelcomeQuote(path);});
+}
 function loadCheckoutAccess(owner){
  const check={owner,available:null};
  checkoutAccess=check;
@@ -147,6 +187,7 @@ async function loadMemberShopping() {
   if(!owner||auth.recoveryOnly)return;
   const result=await authRequest('/api/shopping');
   if(auth.account?.id!==owner)return;
+  welcomeQuote=undefined;
   state.cart=Object.fromEntries(result.cart.map(item=>[item.sku,item.quantity]));
   state.saved=result.saved;
   state.recentlyViewed=result.recent.map(sku=>({id:sku,sku}));
@@ -333,6 +374,13 @@ function render({scroll=false,refreshProductEditor=false}={}) {
   const remote=publicCatalog&&storefront.key===storefrontKey(path,params)?storefront:null;
   if(key!=='cart') repurchaseResult=null;
   if(key!=='checkout'||checkoutAccess?.owner!==state.account?.id)checkoutAccess=undefined;
+  const memberPage=['account','cart','checkout'].includes(key)&&state.account?.verified===true;
+  if(!memberPage||membershipCheck?.path!==path||membershipCheck?.owner!==state.account?.id)membershipCheck=undefined;
+  if(welcomeQuote?.path!==path||welcomeQuote?.owner!==state.account?.id)welcomeQuote=undefined;
+  if(memberPage&&!membershipCheck)loadMembership(state.account.id,path);
+  if(memberPage&&!shoppingLoading&&welcomeSelected&&['cart','checkout'].includes(key)&&
+     !welcomeQuote&&Object.keys(state.cart).length&&!checkoutAccess?.pending)loadWelcomeQuote(state.account.id,path);
+  const benefits={membership:membershipCheck?.data,selected:welcomeSelected,quote:welcomeQuote?.quote,error:welcomeQuote?.error};
   let body='';
   if(publicCatalog&&!remote) body='<section class="empty" role="status"><h2>Loading catalog…</h2></section>';
   else if(publicCatalog&&remote.error) body=storefrontFailure(remote.error);
@@ -356,13 +404,13 @@ function render({scroll=false,refreshProductEditor=false}={}) {
         lastProductView=productView;
         body=detail(product,params,remote.data.related);break;
       }
-      case 'cart': body=cart(repurchaseResult);break;
+      case 'cart': body=cart(repurchaseResult,benefits);break;
       case 'checkout': {
         if(state.account&&!checkoutAccess)loadCheckoutAccess(state.account.id);
         if(checkoutAccess?.available&&deliveryAddresses()===null)queueMicrotask(loadAddresses);
-        body=checkout(deliveryAddresses(),checkoutAccess?.available,{livePayment:checkoutAccess?.livePayment,pending:checkoutAccess?.pending});break;
+        body=checkout(deliveryAddresses(),checkoutAccess?.available,{livePayment:checkoutAccess?.livePayment,pending:checkoutAccess?.pending,benefits});break;
       }
-      case 'account': body=authForms(params)??(account(params)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
+      case 'account': body=authForms(params)??(account(params,benefits.membership)+'<div class="buyer-dashboard account-settings">'+profilePanel()+addressesPanel()+passwordPanel()+'</div>');break;
       case 'orders': body=orders(params);break;
       case 'recently-viewed': body=recentlyViewedPage();break;
       case 'confirmation':
@@ -495,27 +543,38 @@ document.addEventListener('submit', async event=>{
       const active=state.coupons.find(c=>c.code===code&&c.active);
       if(code&&!active) {error='This coupon is unavailable.';break;}
       if(code&&!totals(undefined,code).valid) {error='The basket does not meet the coupon minimum.';break;}
+      welcomeSelected=false;welcomeQuote=undefined;
       state.coupon=code;save();render();message(code?'Coupon applied.':'Coupon cleared.');break;
     }
     case 'account-form':
       error='Use the secure sign-in form.';break;
     case 'checkout-pending-form': {
       const button=event.submitter;if(!button||button.disabled)break;
+      const owner=auth.account?.id;
       button.disabled=true;
       try{
         const result=await authRequest('/api/checkout/manage',{action:button.value});
+        if(owner!==auth.account?.id||auth.recoveryOnly)return;
         if(result.checkoutUrl?.startsWith('https://checkout.stripe.com/')){location.assign(result.checkoutUrl);return;}
-        if(result.cancelled){checkoutAccess=undefined;render();message('Checkout cancelled. Your basket is ready.');return;}
+        if(result.cancelled){checkoutAccess=undefined;membershipCheck=undefined;welcomeQuote=undefined;render();message('Checkout cancelled. Your basket is ready.');return;}
       }catch(problem){error=problem.message;}
       button.disabled=false;break;
     }
     case 'checkout-form': {
+      const owner=auth.account?.id;
+      const discount=welcomeSelected?{memberCoupon:'welcome',quotedTotal:welcomeQuote?.quote?.total}:{coupon:state.coupon||''};
+      if(welcomeSelected&&discount.quotedTotal===undefined)break;
       const button=event.submitter??form.querySelector('button');if(button)button.disabled=true;
       const status=form.querySelector('[data-checkout-status]');if(status){status.hidden=false;status.textContent='Opening Stripe checkout…';}
-      try{const result=await authRequest('/api/checkout/session',{addressId:String(f.addressId),coupon:state.coupon||''});
+      try{const result=await authRequest('/api/checkout/session',{addressId:String(f.addressId),...discount});
+        if(owner!==auth.account?.id||auth.recoveryOnly)return;
         if(typeof result.checkoutUrl!=='string'||!result.checkoutUrl.startsWith('https://checkout.stripe.com/'))throw Error('Checkout could not be verified.');
+        if(welcomeSelected){welcomeSelected=false;welcomeQuote=undefined;membershipCheck=undefined;}
         location.assign(result.checkoutUrl);return;
       }catch(problem){error=problem.message;if(problem.code==='CHECKOUT_PENDING'){checkoutAccess=undefined;render();}
+        else if(welcomeSelected&&['CART_CHANGED','WELCOME_MINIMUM','WELCOME_UNAVAILABLE'].includes(problem.code)){
+          membershipCheck=undefined;welcomeQuote=undefined;loadMemberShopping().catch(()=>render());
+        }
         if(status){status.hidden=false;status.textContent=error;}if(button)button.disabled=false;}
       break;
     }
@@ -555,6 +614,12 @@ document.addEventListener('click', async event=>{
   const button=event.target.closest('button');
   if(!button) return;
   const data=button.dataset;
+  if('welcomeCoupon' in data){
+    if(!welcomeSelected&&membershipCheck?.data?.welcome?.status!=='available')return;
+    welcomeSelected=!welcomeSelected;welcomeQuote=undefined;
+    if(welcomeSelected){state.coupon='';save();}
+    render();return;
+  }
   if('authRetry'in data){await refreshSession();return;}
   if('signOut' in data){
     if(button.disabled)return;
@@ -723,14 +788,15 @@ document.addEventListener('change',async event=>{
   }
 });
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'){storefront={key:'',data:null,error:null};if(!productEditing.isEditing())adminProductsLoaded=false;refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}
+  if(document.visibilityState==='visible'){storefront={key:'',data:null,error:null};membershipCheck=undefined;welcomeQuote=undefined;checkoutAccess=undefined;if(!productEditing.isEditing())adminProductsLoaded=false;refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}
 });
-window.addEventListener('pageshow',event=>{if(event.persisted){storefront={key:'',data:null,error:null};refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}});
+window.addEventListener('pageshow',event=>{if(event.persisted){storefront={key:'',data:null,error:null};membershipCheck=undefined;welcomeQuote=undefined;checkoutAccess=undefined;refreshSession().then(()=>{if(auth.account)loadMemberShopping().catch(()=>{});});render();}});
 window.addEventListener('hashchange',()=>{if(imageDialog.open)imageDialog.close();if(modal.open)modal.close();render({scroll:true});});
 let lastSignedInAccount;
 setAuthListener(()=>{
  const owner=auth.recoveryOnly?undefined:auth.account?.id;
  if(owner!==lastSignedInAccount){
+  membershipCheck=undefined;welcomeQuote=undefined;welcomeSelected=false;
   if(lastSignedInAccount){returnSession='';checkoutReturn=undefined;}
   lastSignedInAccount=owner;
   state.orders=[];state.adminOrders=[];ordersOwner='';ordersRequest=undefined;

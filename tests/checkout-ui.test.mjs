@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {state} from '../dist/store.js';
-import {card,cart,checkout,confirmation,detail,info,orders,shopFrame} from '../dist/shop.js';
+import {account,card,cart,checkout,confirmation,detail,info,orders,shopFrame} from '../dist/shop.js';
 
 test('guests cannot add products to a browser basket',()=>{
  const product=state.products.find(row=>row.status==='Published'&&row.variants[0].stock>=row.variants[0].min);
@@ -45,6 +45,26 @@ test('only approved accounts see a checkout form with a no-charge notice',()=>{
  assert.match(html,/This order is simulated. You will not be charged/);assert.match(html,/Continue to Stripe/);assert.match(html,/name="addressId"/);
  assert.match(html,/<strong>Buyer<\/strong><span>pay@example\.invalid<\/span><span>1 Example Road<\/span><span>#03-04<\/span><span>Singapore 000001<\/span>/);
  assert.doesNotMatch(html,/name="address"/);assert.doesNotMatch(html,/card number/i);
+});
+
+test('the account offers its welcome coupon and the basket displays the server quote',()=>{
+ const previous={account:state.account,cart:state.cart,coupon:state.coupon};
+ try {
+  const product=state.products.find(row=>row.status==='Published');
+  state.account={id:'member',email:'member@example.invalid',name:'Member',verified:true};
+  state.cart={[product.id]:1};
+  state.coupon='';
+  const membership={enabled:true,member:true,welcome:{status:'available',discount:300,minimum:5000,expiresAt:'2026-12-24T00:00:00Z'}};
+  const selected={selected:true,quote:{subtotal:5000,shipping:0,discount:300,total:4700}};
+  assert.match(account(new URLSearchParams(),membership),/Membership centre[\s\S]*S\$3\.00 off S\$50\.00[\s\S]*24 Dec 2026/);
+  assert.doesNotMatch(account(new URLSearchParams(),{...membership,enabled:false}),/Membership centre/);
+  assert.match(cart(null,{membership}),/Use welcome coupon/);
+  assert.match(cart(null,{membership,...selected}),/Remove welcome coupon/);
+  assert.match(cart(null,{membership,...selected}),/−S\$3\.00[\s\S]*S\$47\.00/);
+  const addresses=[{id:'sample',full_name:'Member',address_line:'Example',postal_code:'112233',is_default:true}];
+  assert.match(checkout(addresses,true,{benefits:{selected:true}}),/disabled>Continue to Stripe/);
+  assert.match(checkout(addresses,true,{benefits:selected}),/−S\$3\.00[\s\S]*S\$47\.00/);
+ } finally {Object.assign(state,previous);}
 });
 
 test('Stripe return page waits for the signed webhook instead of claiming final payment state',()=>{

@@ -9,6 +9,103 @@ const cookie='__Host-cvm-session='+'a'.repeat(64);
 const call=(path,data,{origin='https://cpvaluemart.com'}={})=>worker.fetch(new Request('https://cpvaluemart.com'+path,{method:data===undefined?'GET':'POST',headers:{Origin:origin,Cookie:cookie,...(data===undefined?{}:{'Content-Type':'application/json'})},...(data===undefined?{}:{body:JSON.stringify(data)})}),env);
 async function mocked(handler,fn){const original=globalThis.fetch;globalThis.fetch=handler;try{await fn();}finally{globalThis.fetch=original;}}
 
+test('membership reads only the verified account on the current session',async()=>{
+ const otherId='22222222-2222-4222-8222-222222222222';
+ const launch='2026-11-24T00:00:00Z';
+ let member=account, reads=0;
+ const request=()=>new Request('https://cpvaluemart.com/api/membership?userId='+otherId,{headers:{Cookie:cookie}});
+ await mocked(async(url,options)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json(member?{account:member,isAdmin:false}:null);
+  assert.match(String(url),/\/rpc\/read_membership$/);
+  assert.deepEqual(JSON.parse(options.body),{p_user:member.id,p_launch:launch,p_live:false});
+  reads++;
+  return Response.json({enabled:true,member:true,welcome:member.id===userId?{
+   status:'available',discount:300,minimum:5000,expiresAt:'2026-12-24T00:00:00Z'
+  }:null});
+ },async()=>{
+  const settings={...env,MEMBERSHIP_LAUNCH_AT:launch};
+  assert.equal((await (await worker.fetch(request(),settings)).json()).welcome.discount,300);
+  member={...account,id:otherId};
+  assert.equal((await (await worker.fetch(request(),settings)).json()).welcome,null);
+  member={...account,verified:false};
+  assert.equal((await (await worker.fetch(request(),settings)).json()).member,false);
+  member=account;
+  assert.equal((await (await worker.fetch(request(),env)).json()).enabled,false);
+  member=null;
+  assert.equal((await worker.fetch(request(),settings)).status,401);
+  assert.equal(reads,2);
+ });
+});
+
+test('checkout quotes the welcome discount for the session owner and cannot stack a public coupon',async()=>{
+ const launch='2026-11-24T00:00:00Z';
+ const settings={...env,MEMBERSHIP_LAUNCH_AT:launch};
+ const path='/api/checkout/quote';
+ const post=(path,body)=>worker.fetch(new Request('https://cpvaluemart.com'+path,{method:'POST',
+  headers:{Origin:'https://cpvaluemart.com',Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify(body)}),settings);
+ let rejected=false;
+ await mocked(async(url,options)=>{
+  if(String(url).includes('resolve_web_session'))return Response.json({account,isAdmin:false});
+  assert.match(String(url),/\/rpc\/quote_welcome_checkout$/);
+  assert.deepEqual(JSON.parse(options.body),{p_user:userId,p_launch:launch,p_live:false});
+  return rejected?Response.json({message:'WELCOME_MINIMUM'},{status:409}):Response.json({subtotal:5000,shipping:0,discount:300,total:4700});
+ },async()=>{
+  const {subtotal,shipping,discount,total}=await (await post(path,{memberCoupon:'welcome',userId:addressId,total:1})).json();
+  assert.deepEqual({subtotal,shipping,discount,total},{subtotal:5000,shipping:0,discount:300,total:4700});
+  rejected=true;
+  assert.equal((await (await post(path,{memberCoupon:'welcome'})).json()).error.code,'WELCOME_MINIMUM');
+  for(const endpoint of [path,'/api/checkout/session']){
+   const response=await post(endpoint,{addressId,memberCoupon:'welcome',coupon:'PUBLIC',quotedTotal:4700});
+   assert.equal(response.status,400);
+   assert.equal((await response.json()).error.code,'MULTIPLE_COUPONS');
+  }
+ });
+});
+
+test('a welcome checkout charges the authoritative quoted total and is only cancelled after provider expiry',async()=>{
+ const launch='2026-11-24T00:00:00Z';
+ const settings={...env,MEMBERSHIP_LAUNCH_AT:launch};
+ const session={id:'cs_test_welcome',livemode:false,amount_total:4700,currency:'sgd',client_reference_id:orderId,
+  metadata:{order_id:orderId},status:'open',url:'https://checkout.stripe.com/c/pay/welcome'};
+ const path='/api/checkout/session';
+ const post=(path,body)=>worker.fetch(new Request('https://cpvaluemart.com'+path,{method:'POST',
+  headers:{Origin:'https://cpvaluemart.com',Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify(body)}),settings);
+ let expired=false;
+ await mocked(async(url,options)=>{
+  const pathname=new URL(url).pathname;
+  if(pathname.endsWith('/resolve_web_session'))return Response.json({account,isAdmin:false});
+  if(pathname.endsWith('/create_welcome_order')){
+   assert.deepEqual(JSON.parse(options.body),{p_user:userId,p_address:addressId,p_launch:launch,p_live:false,p_expected_total:4700});
+   return Response.json({id:orderId,number:'CVM-1000',subtotal_cents:5000,shipping_cents:0,discount_cents:300,total_cents:4700,
+    items:[{product_name:'QA',variant_name:'QA',unit_cents:5000,quantity:1}]});
+  }
+  if(pathname==='/v1/checkout/sessions'){
+   assert.equal(new URLSearchParams(options.body).get('line_items[0][price_data][unit_amount]'),'4700');
+   return Response.json(session);
+  }
+  if(pathname.endsWith('/attach_test_checkout'))return Response.json(true);
+  if(pathname.endsWith('/read_pending_welcome_checkout')){
+   assert.deepEqual(JSON.parse(options.body),{p_user:userId});
+   return Response.json({id:orderId,stripe_checkout_session_id:session.id});
+  }
+  if(pathname.endsWith('/'+session.id))return Response.json(session);
+  if(pathname.endsWith('/expire')){expired=true;return Response.json({...session,status:'expired'});}
+  if(pathname.endsWith('/cancel_welcome_checkout')){
+   assert.equal(expired,true);
+   assert.deepEqual(JSON.parse(options.body),{p_user:userId,p_order:orderId,p_session:session.id});
+   return Response.json(true);
+  }
+  throw Error('Unexpected request '+url);
+ },async()=>{
+  const created=await post(path,{addressId,memberCoupon:'welcome',quotedTotal:4700,total:1});
+  assert.equal(created.status,201);
+  assert.equal((await created.json()).checkoutUrl,session.url);
+  const cancelled=await post('/api/checkout/manage',{action:'cancel'});
+  assert.equal(cancelled.status,200);
+  assert.equal((await cancelled.json()).cancelled,true);
+ });
+});
+
 test('checkout derives the order total on the server and creates only a Stripe test session',async()=>{
  let stripeForm,attached,member={...account,checkoutEmail:'pay@example.invalid'};
  await mocked(async(url,options)=>{
