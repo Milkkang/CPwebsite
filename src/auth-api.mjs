@@ -1,4 +1,4 @@
-import { ApiError } from './catalog-api.mjs';
+import { ApiError, isIsolatedMembershipPreview, validSupabaseOrigin } from './catalog-api.mjs';
 const COOKIE='__Host-cvm-session';
 export const ORIGINS=new Set(['https://cpvaluemart.com','https://www.cpvaluemart.com']);
 export function isAllowedOrigin(request){
@@ -26,7 +26,7 @@ function cookieHashRequest(request) {
  return /^[a-f0-9]{64}$/.test(value)?value:null;
 }
 async function upstream(env,path,{method='GET',body,token,service=false,allowFailure=false,prefer='return=representation'}={}) {
- if(env.SUPABASE_URL!=='https://tfrfkvkjmaqnpxdhxumr.supabase.co'||!env.SUPABASE_PUBLISHABLE_KEY||!env.SUPABASE_SECRET_KEY)
+ if(!validSupabaseOrigin(env)||!env.SUPABASE_PUBLISHABLE_KEY||!env.SUPABASE_SECRET_KEY)
   throw new ApiError(503,'AUTH_UNAVAILABLE','Account service is temporarily unavailable.');
  let response;
  try { response=await fetch(env.SUPABASE_URL+path,{method,redirect:'manual',signal:AbortSignal.timeout(10000),headers:{apikey:service?env.SUPABASE_SECRET_KEY:env.SUPABASE_PUBLISHABLE_KEY,...(token?{Authorization:'Bearer '+token}:{}),'Content-Type':'application/json',Prefer:prefer},...(body===undefined?{}:{body:JSON.stringify(body)})}); }
@@ -93,8 +93,12 @@ export async function handleAuth(request,env) {
  if(['/api/auth/signup','/api/auth/login','/api/auth/recover','/api/auth/resend'].includes(path)&&!read){
   const data=await bodyJSON(request),address=email(data);await limit(request,env,path.endsWith('/login')?'login':'email',address);
   if(path.endsWith('/login')){const pass=field(data,'password',1,128);const r=await upstream(env,'/auth/v1/token?grant_type=password',{method:'POST',body:{email:address,password:pass},allowFailure:true});if(!r.ok)throw new ApiError(r.status===429?429:401,'SIGN_IN_FAILED','Email or password is incorrect, or the email is not verified.');return result({ok:true},await establish(env,r.data,false));}
-  if(path.endsWith('/signup')){const pass=password(data);const name=field(data,'name',1,80).trim();const r=await upstream(env,'/auth/v1/signup?redirect_to='+encodeURIComponent('https://cpvaluemart.com/auth/confirm'),{method:'POST',body:{email:address,password:pass,data:{display_name:name}},allowFailure:true});if(!r.ok)throw new ApiError(r.status===429?429:400,'SIGNUP_FAILED','Unable to register. Check your details or request another verification email.');}
-  else {const reset=path.endsWith('/recover');const r=await upstream(env,reset?'/auth/v1/recover?redirect_to='+encodeURIComponent('https://cpvaluemart.com/auth/reset'):'/auth/v1/resend',{method:'POST',body:reset?{email:address}:{email:address,type:'signup'},allowFailure:true});if(!r.ok&&r.status!==400)throw new ApiError(r.status===429?429:503,'EMAIL_UNAVAILABLE','Unable to send email now. Try again later.');}
+  const isolatedPreview=isIsolatedMembershipPreview(env);
+  const callbackOrigin=isolatedPreview?new URL(request.url).origin:'https://cpvaluemart.com';
+  if(path.endsWith('/signup')){const pass=password(data);const name=field(data,'name',1,80).trim();const r=await upstream(env,'/auth/v1/signup?redirect_to='+encodeURIComponent(callbackOrigin+'/auth/confirm'),{method:'POST',body:{email:address,password:pass,data:{display_name:name}},allowFailure:true});if(!r.ok)throw new ApiError(r.status===429?429:400,'SIGNUP_FAILED','Unable to register. Check your details or request another verification email.');}
+  else {const reset=path.endsWith('/recover');const endpoint=reset?'/auth/v1/recover?redirect_to='+encodeURIComponent(callbackOrigin+'/auth/reset'):
+   '/auth/v1/resend'+(isolatedPreview?'?redirect_to='+encodeURIComponent(callbackOrigin+'/auth/confirm'):'');
+   const r=await upstream(env,endpoint,{method:'POST',body:reset?{email:address}:{email:address,type:'signup'},allowFailure:true});if(!r.ok&&r.status!==400)throw new ApiError(r.status===429?429:503,'EMAIL_UNAVAILABLE','Unable to send email now. Try again later.');}
   return result({ok:true,message:'If this address is eligible, an email will arrive shortly. Check your inbox and spam folder.'},undefined,202);
  }
  if(path==='/api/auth/verify'&&!read){const data=await bodyJSON(request);const tokenHash=field(data,'token_hash',32,512);if(!/^[A-Za-z0-9_-]+$/.test(tokenHash)||!['email','recovery'].includes(data.type))bad();await limit(request,env,'verify');
@@ -118,6 +122,34 @@ export async function handleAuth(request,env) {
  if(path==='/api/admin'||path.startsWith('/api/admin/')){
   if(!who.isAdmin)throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
   if(path==='/api/admin/access'&&read)return result(publicIdentity(who));
+  if(path==='/api/admin/member-campaigns'){
+   const p_actor=who.account.id;
+   if(read){const rows=await db(env,'rpc/read_member_campaigns',{method:'POST',body:{p_actor}});return result({campaigns:rows.data});}
+   const {id=null,version=0,title,type,amount,minimum,startsAt,expiresAt,audience,memberLimit,totalLimit,active}=await bodyJSON(request);
+   const uuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+   const validInt=(value,min,max=2147483647)=>Number.isInteger(value)&&value>=min&&value<=max;
+   const validDate=value=>{
+    if(typeof value!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(value))return false;
+    const date=new Date(value);
+    return Number.isFinite(date.getTime())&&date.toISOString()===value.replace(/(?<!\.\d{3})Z$/,'.000Z');
+   };
+   if((id===null?version!==0:typeof id!=='string'||!uuid.test(id)||!validInt(version,1))||
+      typeof title!=='string'||!title.trim()||title.trim().length>100||/[\x00-\x1f]/.test(title)||
+      !['fixed','percent'].includes(type)||!validInt(amount,1,type==='percent'?100:2147483647)||!validInt(minimum,0)||
+      !validDate(startsAt)||!validDate(expiresAt)||Date.parse(startsAt)>=Date.parse(expiresAt)||
+      !['all','new','returning'].includes(audience)||!validInt(totalLimit,1)||!validInt(memberLimit,1,totalLimit)||typeof active!=='boolean')
+    bad('Check the campaign terms, dates and limits.');
+   const saved=await db(env,'rpc/save_member_campaign',{method:'POST',allowFailure:true,body:{p_actor,p_id:id,p_version:version,
+    p_campaign:{title:title.trim(),type,amount,minimum,startsAt,expiresAt,audience,memberLimit,totalLimit,active}}});
+   if(!saved.ok){
+    if(saved.data?.code==='42501')throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
+    if(saved.data?.message==='CAMPAIGN_LIMIT_IN_USE')throw new ApiError(409,'CAMPAIGN_LIMIT_IN_USE','The new limit is lower than existing reservations or redemptions.');
+    if(saved.data?.message==='CAMPAIGN_CHANGED')throw new ApiError(409,'CAMPAIGN_CHANGED','This campaign changed. Reload it before saving.');
+    throw new ApiError(400,'INVALID_CAMPAIGN','Check the campaign terms, dates and limits.');
+   }
+   return result({campaign:saved.data},undefined,id===null?201:200);
+  }
+
   if(path==='/api/admin/search'&&read){
    const rows=await db(env,'catalog_search_counts?select=term,searches,misses&order=searches.desc&limit=100');
    return result({searches:rows.data});

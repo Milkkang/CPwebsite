@@ -1,6 +1,15 @@
 export class ApiError extends Error {
   constructor(status, code, message) { super(message); this.status = status; this.code = code; }
 }
+const productionSupabaseRef='tfrfkvkjmaqnpxdhxumr';
+export function isIsolatedMembershipPreview(env){
+  const ref=env.MEMBERSHIP_PREVIEW_SUPABASE_REF;
+  return env.STRIPE_CHECKOUT_MODE==='sandbox'&&typeof ref==='string'&&/^[a-z0-9]{20}$/.test(ref)&&
+    ref!==productionSupabaseRef&&env.SUPABASE_URL==='https://'+ref+'.supabase.co';
+}
+export function validSupabaseOrigin(env){
+  return env.SUPABASE_URL==='https://'+productionSupabaseRef+'.supabase.co'||isIsolatedMembershipPreview(env);
+}
 const fail = message => { throw new ApiError(400, 'INVALID_QUERY', message); };
 export function catalogParameters(params) {
   const allowed = new Set(['q','category','brand','sort','size','page']);
@@ -24,7 +33,7 @@ export function catalogParameters(params) {
 
 async function database(env, path, options = {}) {
   // The read API intentionally uses anon/RLS privileges, never a service secret.
-  if (!env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_URL !== 'https://tfrfkvkjmaqnpxdhxumr.supabase.co')
+  if (!env.SUPABASE_PUBLISHABLE_KEY || !validSupabaseOrigin(env))
     throw new ApiError(503, 'CATALOG_UNAVAILABLE', 'Catalog is temporarily unavailable.');
   try {
     const response = await fetch(env.SUPABASE_URL + '/rest/v1/' + path, {
@@ -38,7 +47,7 @@ async function database(env, path, options = {}) {
   }
 }
 async function publicOffers(env) {
-  if (!env.SUPABASE_SECRET_KEY || env.SUPABASE_URL !== 'https://tfrfkvkjmaqnpxdhxumr.supabase.co')
+  if (!env.SUPABASE_SECRET_KEY || !validSupabaseOrigin(env))
     throw new ApiError(503, 'CATALOG_UNAVAILABLE', 'Offers are temporarily unavailable.');
   try {
     const response=await fetch(env.SUPABASE_URL+'/rest/v1/coupons?select=code,kind,amount,minimum_cents&active=eq.true&order=code.asc',{
