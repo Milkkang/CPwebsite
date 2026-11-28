@@ -1,4 +1,4 @@
-import {cash,escape as e,netOrderTotal} from './store.js';
+import {cash,escape as e} from './store.js';
 import {href} from './shop.js';
 
 const metrics=[
@@ -29,7 +29,7 @@ export function analyticsData({from,to},range,orders,traffic=[]) {
   for(const order of orders) {
     if(order.status==='Cancelled'||order.date<from||order.date>to) continue;
     const day=daily.get(order.date)??totalsRow();
-    if(order.livePayment&&order.paymentStatus==='paid')day.sales+=netOrderTotal(order);
+    if(order.livePayment&&order.paymentStatus==='paid')day.sales+=order.totals.total;
     day.orders++;
     daily.set(order.date,day);
   }
@@ -124,7 +124,7 @@ function addRevenueOrder(bucket,order) {
   if(!order.livePayment)return;
   if(order.status==='Cancelled') bucket.cancelled++;
   else if(order.paymentStatus==='paid') {
-    bucket.sales+=netOrderTotal(order);
+    bucket.sales+=order.totals.total;
     bucket.orders++;
   }
 }
