@@ -1,6 +1,4 @@
-import {pointsBalance,pointsBasketControl} from './membership-points.js';
 import {state,cash,escape as e,categories,categoryName,productPrice,cartLines,totals,matching,imageUrl,statusList,findProduct,buyerOrders,pendingReviewItems,homepageSettings} from './store.js';
-import {campaignAvailability} from './member-campaigns.js';
 
 export const href = (path, params={}) => '#'+path+(Object.keys(params).length ? '?'+new URLSearchParams(params) : '');
 export const link = (path,label,klass='') => '<a class="'+klass+'" href="'+e(path)+'">'+label+'</a>';
@@ -47,7 +45,7 @@ export function productLabel(p, content, variant) {
 export function orderItemLabel(item,showRating=false) {
   const p=findProduct(item.productId)??{name:item.name};
   const v=p.variants?.find(v=>v.sku===item.sku);
-  return productLabel(p,'<b>'+e(item.name)+'</b><small>'+e(item.option)+' × '+item.qty+'</small>'+(item.refundedQty?'<small>Refunded quantity '+e(item.refundedQty)+'</small>':'')+(showRating&&item.review?'<small>Rated '+e(item.review.rating)+'/5</small>':''),v);
+  return productLabel(p,'<b>'+e(item.name)+'</b><small>'+e(item.option)+' × '+item.qty+'</small>'+(showRating&&item.review?'<small>Rated '+e(item.review.rating)+'/5</small>':''),v);
 }
 export const orderItemsPreview = (items,{showRating=false}={}) => '<ul class="item-previews">'+items.map(item=>'<li>'+orderItemLabel(item,showRating)+'</li>').join('')+'</ul>';
 const logo=()=>go('/','<span class="mark" aria-hidden="true"></span><span>CP <b>Value Mart</b></span>','logo');
@@ -153,12 +151,8 @@ export function detail(p, params, relatedProducts=state.products) {
 }
 export function summary(amounts,checkout=false) {
   return  '<aside class="panel summary"><h2>Order summary</h2>'+
-    (checkout?orderItemsPreview(cartLines().map(({sku,product,variant,qty})=>({productId:product?.id,sku,name:product?.name??sku,option:variant?.name??'Unavailable',qty}))):'')+'<dl><div><dt>Subtotal</dt><dd>'+cash(amounts.subtotal)+'</dd></div><div><dt>Delivery</dt><dd>'+cash(amounts.shipping+(amounts.deliveryAllowance?.discount??0))+'</dd></div>'+
-    (amounts.deliveryAllowance?.discount?'<div><dt>Annual pass delivery</dt><dd>−'+cash(amounts.deliveryAllowance.discount)+'</dd></div>':'')+
-    (amounts.pointsDiscount?
-      (amounts.couponDiscount?'<div><dt>Coupon</dt><dd>−'+cash(amounts.couponDiscount)+'</dd></div>':'')+
-      '<div><dt>Points</dt><dd>−'+cash(amounts.pointsDiscount)+'</dd></div>':
-      amounts.discount?'<div><dt>Discount</dt><dd>−'+cash(amounts.discount)+'</dd></div>':'')+
+    (checkout?orderItemsPreview(cartLines().map(({sku,product,variant,qty})=>({productId:product?.id,sku,name:product?.name??sku,option:variant?.name??'Unavailable',qty}))):'')+'<dl><div><dt>Subtotal</dt><dd>'+cash(amounts.subtotal)+'</dd></div><div><dt>Delivery</dt><dd>'+cash(amounts.shipping)+'</dd></div>'+
+    (amounts.discount?'<div><dt>Discount</dt><dd>−'+cash(amounts.discount)+'</dd></div>':'')+
     '<div class="total"><dt>Total</dt><dd>'+cash(amounts.total)+'</dd></div></dl>'+
     (checkout?'<p class="subtle">Amounts are in SGD.</p>':go('/checkout','Continue to checkout ↗','btn primary full'))+'</aside>';
 }
@@ -168,62 +162,22 @@ function repurchaseNotice(result) {
     (result.added?result.added+' '+(result.added===1?'unit':'units')+' added to your basket.':'No items could be added to your basket.')+
     '</strong><ul>'+result.skipped.map(item=>'<li>'+e(item.name)+(item.option?' · '+e(item.option):'')+' — '+e(item.error)+'</li>').join('')+'</ul></div>';
 }
-function welcomeTerms(coupon) {
-  return cash(coupon.discount)+' off '+cash(coupon.minimum)+' of products';
-}
-export function welcomeBasketControl({membership,selected,error,quote}={}) {
-  const welcome=membership?.welcome;
-  const campaigns=membership?.campaigns??[];
-  const selectedWelcome=selected===true||selected==='welcome';
-  const selectedCampaign=selected&&!selectedWelcome;
-  const status=message=>'<p role="status">'+e(error||(quote?message+' applied.':'Checking your '+message.toLowerCase()+'…'))+'</p>';
-  const welcomeControl=selectedWelcome||welcome?.status==='available'
-    ?'<div class="coupon-form"><button type="button" class="btn outline" data-welcome-coupon>'+
-     (selectedWelcome?'Remove welcome coupon':'Use welcome coupon')+'</button>'+
-     (selectedWelcome?status('Welcome coupon'):'<p class="subtle">'+welcomeTerms(welcome)+'</p>')+'</div>':'';
-  const removeCampaign=selectedCampaign?'<div class="coupon-form"><button type="button" class="btn outline" data-member-campaign="'+e(selected)+'">Remove campaign coupon</button>'+status('Campaign coupon')+'</div>':'';
-  return welcomeControl+removeCampaign+campaigns.filter(campaign=>campaign.id!==selected).map(campaign=>
-    '<div class="coupon-form"><button type="button" class="btn outline" data-member-campaign="'+e(campaign.id)+'">Use '+e(campaign.title)+
-    '</button><p class="subtle">'+e(campaignAvailability(campaign))+'</p></div>').join('');
-}
-const memberDate=new Intl.DateTimeFormat('en-SG',{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Singapore'});
-const tierNames={base:'Base',silver:'Silver',gold:'Gold'};
-function deliveryTerms(allowance){
-  return 'Save up to '+cash(allowance.amount)+' on standard delivery when products total '+cash(allowance.minimum)+' or more.';
-}
-function deliveryStatus(allowance){
-  if(allowance.status==='used')return 'You have used your delivery allowance for this membership month.';
-  if(allowance.status==='reserved')return 'Your delivery allowance is reserved in an open checkout.';
-  return deliveryTerms(allowance);
-}
-export function deliveryBasketControl({membership,delivery,quote,error}={}) {
-  const allowance=membership?.deliveryAllowance;
-  if(!allowance&&!delivery)return '';
-  return '<div class="points-redemption"><h3>Annual pass delivery</h3>'+
-    (allowance?'<p>'+deliveryStatus(allowance)+'</p>':'')+
-    (delivery||allowance?.available?'<button type="button" class="btn outline" data-delivery-allowance>'+
-      (delivery?'Remove delivery allowance':'Use delivery allowance')+'</button>':'')+
-    (delivery?'<p role="status">'+e(error||(quote?'Delivery allowance applied.':'Checking your delivery allowance…'))+'</p>':'')+'</div>';
-}
-export function cart(repurchase,benefits) {
+export function cart(repurchase) {
   if(!state.account)return crumb('Basket')+accountSignIn('/cart');
-  const rows=cartLines(), amounts=benefits?.quote??totals();
+  const rows=cartLines(), amounts=totals();
   return crumb(go('/account','My Account'),'Basket')+'<div class="page-title"><h1>Your basket</h1></div>'+repurchaseNotice(repurchase)+(!rows.length?empty('Your basket is empty','Browse the shop to add something.',go('/shop','Continue shopping','btn primary')):
     '<div class="two-col"><section class="panel">'+rows.map(({sku,qty,product,variant})=>'<article class="cart-line">'+
     (product?photo(product,'mini',variant):'<div></div>')+'<div><h3>'+(product?go('/product/'+product.id,e(product.name)):e(sku))+'</h3><p class="subtle">'+(variant?e(variant.name)+' · '+cash(variant.price):'Unavailable')+'</p>'+
     '<div class="button-row"><button class="btn small outline" data-quantity="'+e(sku)+'" data-delta="-1" aria-label="Decrease quantity">−</button><span>'+qty+'</span><button class="btn small outline" data-quantity="'+e(sku)+'" data-delta="1" aria-label="Increase quantity">+</button><button class="link-button" data-remove="'+e(sku)+'">Remove</button></div></div><strong>'+(variant?cash(variant.price*qty):'—')+'</strong></article>').join('')+
     '<form id="coupon-form" class="coupon-form"><label>Coupon code <input name="code" value="'+e(state.coupon)+'" placeholder="Enter code" maxlength="24"></label><button class="btn outline">Apply</button></form>'+
-    (state.coupon?'<p class="subtle">'+(amounts.valid?e(state.coupon)+' is applied.':'Coupon requirements are currently unmet.')+'</p>':'')+
-    '<div data-welcome-basket>'+welcomeBasketControl(benefits)+'</div><div data-points-basket>'+pointsBasketControl(benefits)+
-    '</div><div data-delivery-basket>'+deliveryBasketControl(benefits)+'</div></section>'+summary(amounts)+'</div>');
+    (state.coupon?'<p class="subtle">'+(amounts.valid?e(state.coupon)+' is applied.':'Coupon requirements are currently unmet.')+'</p>':'')+'</section>'+summary(amounts)+'</div>');
 }
-export function checkout(addresses,availability=false,{livePayment=false,pending=false,benefits}={}) {
+export function checkout(addresses,availability=false,{livePayment=false,pending=false}={}) {
   if(availability===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Checking availability…</p></section>';
   if(!availability)return crumb('Checkout')+empty('Online ordering is currently unavailable','You can still browse products and save items to your basket.',go('/shop','Continue shopping','btn primary'));
   if(!state.account)return crumb('Checkout')+accountSignIn('/checkout');
   if(pending)return crumb('Checkout')+'<form id="checkout-pending-form" class="panel narrow form-stack"><h1>Checkout in progress</h1><p>Continue your open checkout, or cancel it to make changes to your basket.</p><div class="button-row"><button class="btn primary" value="resume">Continue to Stripe</button><button class="btn outline" value="cancel">Cancel checkout</button></div></form>';
-  const rows=cartLines(),amounts=benefits?.quote??totals();
-  const checkingBenefits=(benefits?.selected||benefits?.points||benefits?.delivery)&&!benefits.quote;
+  const rows=cartLines(),amounts=totals();
   if(!rows.length)return crumb('Checkout')+empty('Your basket is empty','Add a product before starting checkout.',go('/shop','Continue shopping','btn primary'));
   if(addresses===null)return crumb('Checkout')+'<section class="panel narrow"><h1>Checkout</h1><p role="status">Loading delivery addresses…</p></section>';
   if(!addresses.length)return crumb('Checkout')+empty('Add a delivery address','Save a Singapore delivery address in your account before checkout.',go('/account','Open my account','btn primary'));
@@ -242,9 +196,7 @@ export function checkout(addresses,availability=false,{livePayment=false,pending
       e(address.full_name)+' · '+e(address.address_line.replace(/\s+/g,' '))+' · Singapore '+e(address.postal_code)+'</option>').join('')+
     '</select></label><div aria-live="polite">'+cards+'</div>'+
     (livePayment?'':'<p class="notice">Use the sample card details provided for this checkout. Do not enter a real card.</p>')+
-    (checkingBenefits?'<p class="notice" role="status">'+e(benefits.error||'Checking your member benefits…')+
-      (benefits.error?' '+go('/cart','Return to your basket'):'')+'</p>':'')+
-    '<button class="btn primary"'+(checkingBenefits?' disabled':'')+'>Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
+    '<button class="btn primary">Continue to Stripe</button><p data-checkout-status role="status" class="notice" hidden></p></form>'+summary(amounts,true)+'</div>';
 }
 function accountSignIn(next='') {
   return '<section class="panel narrow"><h2>Sign in to your account</h2>'+link(href('/account',{next}),'Sign in','btn primary')+'</section>';
@@ -290,27 +242,7 @@ function buyerProductSection(title,rows,emptyText,action='') {
   return '<section class="panel buyer-product-section"><div class="section-title"><h2>'+title+'</h2>'+action+'</div>'+
     (rows.length?buyerProductTiles(rows):'<p class="buyer-empty subtle">'+emptyText+'</p>')+'</section>';
 }
-export function membershipPanel(membership) {
-  if(!membership?.enabled||!membership.member)return '';
-  const coupon=membership.welcome;
-  const status={
-    available:'',reserved:'The coupon is reserved in your open checkout.',
-    used:'You have used your welcome coupon.',expired:'Your welcome coupon has expired.',
-    ineligible:'The welcome coupon is for your first paid order.'
-  }[coupon?.status];
-  const expiry=coupon?.status==='available'?memberDate.format(new Date(coupon.expiresAt)):null;
-  const tier=membership.spendingTier,allowance=membership.deliveryAllowance;
-  return '<section class="panel"><h2>Membership centre</h2><p>Free member</p>'+
-    (tier?'<h3>'+tierNames[tier.tier]+' spending tier</h3><p>'+cash(tier.qualifyingSpend)+
-      ' qualifying spend in the past 12 months. Earn '+(tier.multiplier/100)+' points per S$1.</p>'+
-      (tier.nextTier?'<p>'+cash(Math.max(0,tier.nextThreshold-tier.qualifyingSpend))+' to '+tierNames[tier.nextTier]+'.</p>':''):'')+
-    (expiry?'<h3>Welcome coupon</h3><p>'+welcomeTerms(coupon)+'. Valid until '+e(expiry)+' (Singapore time).</p>':status?'<p>'+status+'</p>':'')+
-    (membership.campaigns??[]).map(campaign=>'<h3>'+e(campaign.title)+'</h3><p>'+e(campaignAvailability(campaign))+'</p>').join('')+
-    (allowance?'<h3>Annual pass delivery</h3><p>'+deliveryStatus(allowance)+' This allowance period ends '+
-      e(memberDate.format(new Date(allowance.expiresAt)))+' (Singapore time).</p>':'')+
-    (expiry||membership.campaigns?.length||allowance?.available?go('/cart','Go to basket','btn outline'):'')+pointsBalance(membership.points)+'</section>';
-}
-export function account(params,membership) {
+export function account(params) {
   const a=state.account;
   const title='<div class="page-title buyer-account-title"><div><h1>My account</h1>';
   if(!a) return crumb('My account')+'<div class="buyer-dashboard">'+title+'</div></div>'+
@@ -319,7 +251,7 @@ export function account(params,membership) {
   return crumb('My account')+'<div class="buyer-dashboard">'+title+
     '<p>'+e(a.name)+' <span class="subtle">· '+e(a.email)+'</span></p></div>'+
     '<button class="btn outline small" data-sign-out>Sign out</button></div>'+
-    '<div data-membership-centre'+(membership?.enabled&&membership.member?'':' hidden')+'>'+membershipPanel(membership)+'</div><div data-annual-pass hidden></div>'+purchaseShortcuts(purchases)+
+    purchaseShortcuts(purchases)+
     buyerProductSection('Recently Viewed',recentlyViewed.slice(0,6),'Products you open will appear here.',
       recentlyViewed.length>6?go('/recently-viewed','View all <span aria-hidden="true">›</span>','text-link'):'')+'</div>';
 }
@@ -400,15 +332,14 @@ export function orders(params=new URLSearchParams()) {
   return nav+(!purchases.length?empty('No orders yet','Orders you place in this browser appear here.',go('/shop','Browse products','btn primary')):
     '<div class="panel table-wrap"><table><thead><tr><th>Order</th><th>Products</th><th>Date</th><th>Status</th><th>Total</th><th></th></tr></thead><tbody>'+purchases.map(o=>'<tr><td>'+e(o.id)+'</td><td>'+orderItemsPreview(o.items,{showRating:true})+'</td><td>'+e(o.date)+'</td><td>'+buyerOrderBadge(o)+'</td><td>'+cash(o.totals.total)+'</td><td><div class="purchase-history-actions">'+link(href('/orders',{id:o.id}),'View order ↗','text-link')+repurchaseButton(o)+'</div></td></tr>').join('')+'</tbody></table></div>');
 }
-const buyerOrderBadge=(order,label)=>order.paymentStatus==='pending'?badge('Pending','Payment pending'):order.paymentStatus==='refunded'?badge('Refunded'):badge(order.status,label);
+const buyerOrderBadge=(order,label)=>order.paymentStatus==='pending'?badge('Pending','Payment pending'):badge(order.status,label);
 export function orderDisplay(o,{buyerTracking=false}={}) {
   if(!o) return '';
   const stage=buyerTracking?trackingStages.find(item=>item.status===o.status):null;
   const tracking=o.tracking||(buyerTracking&&o.status!=='Processing'?'Not available':'Awaiting shipment');
   return '<div class="panel order-display"><div class="section-title"><div><h2>'+e(o.id)+'</h2><p class="subtle">'+e(o.date)+'</p></div>'+buyerOrderBadge(o,buyerTracking&&o.status==='Delivered'?'Received':stage?.label)+'</div>'+
     (o.status==='Cancelled'||o.paymentStatus==='pending'?'':buyerTracking?buyerTrackingSteps(o.status):'<ol class="tracking-steps">'+statusList.slice(0,3).map((s,i)=>'<li class="'+(i<=statusList.indexOf(o.status)?'done':'')+'">'+s+'</li>').join('')+'</ol>')+
-    '<p class="subtle">'+(o.livePayment?'':'Simulated order · No charge. ')+'Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p>'+
-    (o.refundedCents||o.items.some(item=>item.refundedQty)?'<p class="order-total">Refunded <strong>'+cash(o.refundedCents??0)+'</strong></p>':'')+'</div>';
+    '<p class="subtle">'+(o.livePayment?'':'Simulated order · No charge. ')+'Payment status: '+e(o.paymentStatus??'unverified')+'</p><p>Tracking number <strong>'+e(tracking)+'</strong></p><ul class="order-items">'+o.items.map(i=>'<li>'+orderItemLabel(i)+'<strong>'+cash(i.price*i.qty)+'</strong></li>').join('')+'</ul><p class="order-total">Total <strong>'+cash(o.totals.total)+'</strong></p></div>';
 }
 export function confirmation(params,result) {
   const id=result?.orderNumber??(params.get('id')??'').trim().toUpperCase();

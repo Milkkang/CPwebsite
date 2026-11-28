@@ -1,7 +1,5 @@
-import { ApiError, isIsolatedMembershipPreview } from './catalog-api.mjs';
+import { ApiError } from './catalog-api.mjs';
 import { isAllowedOrigin, bodyJSON, bodyText, db, identity } from './auth-api.mjs';
-import { applyPaidMembershipEvent, handlePaidMembership, paidMembershipRoute } from './paid-membership-api.mjs';
-import { adminMemberPoints, readBuyerPoints, requestedPoints } from './membership-points-api.mjs';
 
 const encoder=new TextEncoder();
 const orderUuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -11,27 +9,6 @@ const originGuard=request=>{
 };
 const checkoutMode=env=>env.STRIPE_CHECKOUT_MODE??'sandbox';
 const liveMode=env=>['live-pilot','live'].includes(checkoutMode(env));
-export function membershipLaunch(env,binding='MEMBERSHIP_LAUNCH_AT'){
- const value=env[binding];
- if(typeof value!=='string'||!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(value))return null;
- const date=new Date(value);
- return Number.isFinite(date.getTime())&&date.toISOString()===value.replace('Z','.000Z')?value:null;
-}
-const pointsActive=(env,launch=membershipLaunch(env))=>liveMode(env)&&launch!==null&&Date.parse(launch)<=Date.now();
-function stageLaunch(env,binding,first=membershipLaunch(env)){
- const starts=membershipLaunch(env,binding);
- return first&&starts&&starts>=first&&Date.parse(starts)<=Date.now()?starts:null;
-}
-const tierStage=env=>stageLaunch(env,'MEMBERSHIP_TIERS_LAUNCH_AT');
-const tiersLaunch=env=>liveMode(env)?tierStage(env):null;
-const deliveryLaunch=env=>stageLaunch(env,'PAID_MEMBERSHIP_LAUNCH_AT',tierStage(env));
-const deliveryMonthPattern=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/(?:[0-9]|1[01])$/i;
-function requestedDelivery(input,env){
- if(input.deliveryAllowance===undefined)return false;
- if(input.deliveryAllowance!==true)throw new ApiError(400,'INVALID_INPUT','Choose a valid delivery allowance.');
- if(!deliveryLaunch(env))throw checkoutConflict('DELIVERY_ALLOWANCE_UNAVAILABLE');
- return true;
-}
 const sessionPattern=live=>live?/^cs_live_[A-Za-z0-9_]{1,200}$/:/^cs_test_[A-Za-z0-9_]{1,200}$/;
 const stripeReady=env=>{
  const mode=checkoutMode(env);
@@ -61,10 +38,7 @@ async function stripeRead(env,path){
 function orderShape(row){
  return {id:row.id,number:row.number,version:row.version,paymentStatus:row.payment_status,fulfilmentStatus:row.fulfilment_status,
   tracking:row.tracking_number,subtotal:row.subtotal_cents,shipping:row.shipping_cents,discount:row.discount_cents,total:row.total_cents,
-  createdAt:row.created_at,paidAt:row.paid_at,livePayment:row.live_payment===true,
-  refundedCents:row.refunded_cents??0,refundedMerchandiseCents:row.refunded_merchandise_cents??0,
-  items:(row.items??[]).map(item=>({sku:item.sku,name:item.product_name,option:item.variant_name,image:item.image_url,
-   price:item.unit_cents,qty:item.quantity,refundedQty:item.refunded_quantity??0}))};
+  createdAt:row.created_at,paidAt:row.paid_at,livePayment:row.live_payment===true,items:(row.items??[]).map(item=>({sku:item.sku,name:item.product_name,option:item.variant_name,image:item.image_url,price:item.unit_cents,qty:item.quantity}))};
 }
 async function canUsePreviewCheckout(who,env){
  if(!who.account.verified)return false;
@@ -90,18 +64,14 @@ function addCheckoutSummary(form,order,live){
  const {items,subtotal_cents:subtotal,shipping_cents:shipping,discount_cents:discount,total_cents:total}=order;
  if(!items?.length||subtotal<=0||discount<0||discount>subtotal||subtotal+shipping-discount!==total)
   throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Checkout is temporarily unavailable.');
- const pricing=order.pricing?new Map(order.pricing.map(row=>[row.sku,row])):null;
  let gross=0,allocated=0;
  const products=items.map(item=>{
-  const original=item.unit_cents*item.quantity;
-  gross+=original;
-  const breakdown=pricing?.get(item.sku);
-  if(pricing&&(!breakdown||breakdown.gross_cents!==original||breakdown.quantity!==item.quantity||
-    breakdown.cash_cents+breakdown.coupon_cents+breakdown.point_cents!==original))
-   throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Checkout is temporarily unavailable.');
-  const reduction=breakdown?breakdown.coupon_cents+breakdown.point_cents:Math.round(discount*(gross/subtotal))-allocated;
-  allocated+=reduction;
-  const net=original-reduction;
+  gross+=item.unit_cents*item.quantity;
+  // Allocate the server discount across product rows and preserve every cent.
+  const cumulative=Math.round(discount*(gross/subtotal));
+  const reduction=cumulative-allocated;
+  allocated=cumulative;
+  const net=item.unit_cents*item.quantity-reduction;
   const quantity=net%item.quantity===0?item.quantity:1;
   const variant=item.variant_name&&item.variant_name!==item.product_name?' · '+item.variant_name:'';
   const label=Array.from(item.product_name+variant).slice(0,200).join('');
@@ -133,66 +103,9 @@ function addCheckoutSummary(form,order,live){
   'Order summary',
   'Subtotal '+checkoutMoney(subtotal),
   'Delivery '+(shipping?checkoutMoney(shipping):'Free'),
-  ...(order.delivery_allowance_cents?['Annual pass delivery −'+checkoutMoney(order.delivery_allowance_cents)]:[]),
-  ...(order.member_points_redeemed?[
-   ...(discount>order.member_points_redeemed?['Coupon −'+checkoutMoney(discount-order.member_points_redeemed)]:[]),
-   'Points −'+checkoutMoney(order.member_points_redeemed)
-  ]:discount?['Discount −'+checkoutMoney(discount)]:[]),
+  ...(discount?['Discount −'+checkoutMoney(discount)]:[]),
   'Total '+checkoutMoney(total)
  ].join('\n\n'));
-}
-function memberCouponSelection(data,env){
- if(data.memberCoupon===undefined)return null;
- const welcome=data.memberCoupon==='welcome';
- if(!welcome&&(typeof data.memberCoupon!=='string'||!orderUuid.test(data.memberCoupon)))throw new ApiError(400,'INVALID_INPUT','Choose a valid member coupon.');
- if(data.coupon)throw new ApiError(400,'MULTIPLE_COUPONS','Choose one coupon per order.');
- const launch=membershipLaunch(env);
- if(!launch)throw checkoutConflict(welcome?'WELCOME_UNAVAILABLE':'CAMPAIGN_UNAVAILABLE');
- return {launch,welcome,campaign:welcome?null:data.memberCoupon};
-}
-function checkoutConflict(message){
- const reasons={
-  CHECKOUT_PENDING:'A checkout is still open. Complete or cancel it before starting a new one.',
-  WELCOME_UNAVAILABLE:'The welcome coupon is no longer available.',
-  WELCOME_MINIMUM:'The welcome coupon requires S$50 of products.',
-  CAMPAIGN_UNAVAILABLE:'This member campaign coupon is no longer available.',
-  CAMPAIGN_MINIMUM:'Your products do not meet the campaign coupon minimum.',
-  ADDRESS_INVALID:'Your delivery address changed. Select it again.',
-  COUPON_INVALID:'The coupon is unavailable for this basket.',
-  POINTS_MINIMUM:'Points redemption starts at 100 points.',
-  POINTS_UNAVAILABLE:'Points are unavailable for this checkout.',
-  POINTS_LIMIT:'The selected points exceed your available balance or the limit for this basket.',
-  DELIVERY_ALLOWANCE_UNAVAILABLE:'Your annual delivery allowance is unavailable for this checkout.',
-  DELIVERY_ALREADY_FREE:'This basket already qualifies for free delivery. Your allowance is still available.',
-  DELIVERY_ALLOWANCE_MINIMUM:'Your annual delivery allowance requires S$30 of products.',
-  DELIVERY_ALLOWANCE_MINIMUM_PAYMENT:'This basket would fall below the minimum payment. Adjust your discounts to use the allowance.',
-  CART_CHANGED:'Your basket, coupon or address changed. Refresh and try again.'
- };
- const code=Object.hasOwn(reasons,message)?message:'CART_CHANGED';
- return new ApiError(409,code,reasons[code]);
-}
-async function quoteCheckout(request,env){
- if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
- originGuard(request);
- const who=await identity(request,env);
- const input=await bodyJSON(request);
- const selection=memberCouponSelection(input,env);
- const points=requestedPoints(input.points);
- const active=pointsActive(env);
- const delivery=requestedDelivery(input,env);
- if(points&&!active)throw checkoutConflict('POINTS_UNAVAILABLE');
- if(!who.account.verified||!active&&!selection&&!delivery)
-  throw checkoutConflict(delivery?'DELIVERY_ALLOWANCE_UNAVAILABLE':selection?.campaign?'CAMPAIGN_UNAVAILABLE':'WELCOME_UNAVAILABLE');
- if(input.coupon!==undefined&&(typeof input.coupon!=='string'||!/^[A-Z0-9_-]{0,40}$/.test(input.coupon)))
-  throw new ApiError(400,'INVALID_INPUT','Check the coupon.');
- const path=delivery?'rpc/quote_delivery_checkout':active?'rpc/quote_points_checkout':
-  selection.welcome?'rpc/quote_welcome_checkout':'rpc/quote_campaign_checkout';
- const {ok,data}=await db(env,path,{method:'POST',
-  body:{p_user:who.account.id,p_launch:membershipLaunch(env),p_live:liveMode(env),...(active||delivery?{
-   p_member_coupon:input.memberCoupon??null,p_coupon:input.coupon||null,p_points:points,...(delivery?{p_use:true}:{})
-  }:selection.campaign?{p_campaign:selection.campaign}:{})},allowFailure:true});
- if(!ok)throw checkoutConflict(data?.message);
- return {status:200,data:{...data,accountId:who.account.id}};
 }
 async function createSession(request,env){
  originGuard(request);
@@ -203,35 +116,11 @@ async function createSession(request,env){
  const data=await bodyJSON(request);
  if(!safeId(data.addressId)||data.coupon!==undefined&&(typeof data.coupon!=='string'||!/^[A-Z0-9_-]{0,40}$/.test(data.coupon)))
   throw new ApiError(400,'INVALID_INPUT','Choose a delivery address and check the coupon.');
- const selection=memberCouponSelection(data,env);
- const points=requestedPoints(data.points);
- const active=pointsActive(env);
- const delivery=requestedDelivery(data,env);
- if(points&&!active)throw checkoutConflict('POINTS_UNAVAILABLE');
- const requiresQuote=Boolean(selection||points||delivery||active&&data.quotedTotal!==undefined);
- if(requiresQuote&&(!Number.isSafeInteger(data.quotedTotal)||data.quotedTotal<50||data.quotedTotal>2147483647))
-  throw new ApiError(400,'INVALID_INPUT','Refresh your basket total before checking out.');
- let path=live?'rpc/create_live_order':'rpc/create_test_order';
- const orderInput={p_user:who.account.id,p_address:data.addressId};
- if(active||delivery){
-  path=delivery?'rpc/create_delivery_order':'rpc/create_points_order';
-  Object.assign(orderInput,{p_launch:membershipLaunch(env),p_live:live,p_member_coupon:data.memberCoupon??null,
-   p_coupon:data.coupon||null,p_points:points,p_expected_total:requiresQuote?data.quotedTotal:null});
-  if(delivery){
-   if(typeof data.deliveryMonth!=='string'||!deliveryMonthPattern.test(data.deliveryMonth))
-    throw new ApiError(400,'INVALID_INPUT','Refresh your delivery allowance before checking out.');
-   Object.assign(orderInput,{p_use:true,p_month:data.deliveryMonth});
-  }
- }else if(selection){
-  path=selection.welcome?'rpc/create_welcome_order':'rpc/create_campaign_order';
-  Object.assign(orderInput,{p_launch:selection.launch,p_live:live,p_expected_total:data.quotedTotal});
-  if(selection.campaign)orderInput.p_campaign=selection.campaign;
- }else orderInput.p_coupon=data.coupon||null;
- const created=await db(env,path,{method:'POST',body:orderInput,allowFailure:true});
- if(!created.ok||!created.data?.id)throw checkoutConflict(created.data?.message);
+ const created=await db(env,live?'rpc/create_live_order':'rpc/create_test_order',{method:'POST',body:{p_user:who.account.id,p_address:data.addressId,p_coupon:data.coupon||null},allowFailure:true});
+ if(!created.ok&&created.data?.message==='CHECKOUT_PENDING')throw new ApiError(409,'CHECKOUT_PENDING','A checkout is still open. Complete or cancel it before starting a new one.');
+ if(!created.ok||!created.data?.id)throw new ApiError(409,created.data?.message==='ADDRESS_INVALID'?'ADDRESS_INVALID':'CART_CHANGED','Your basket, coupon or address changed. Refresh and try again.');
  const order=created.data;
- const checkoutOrigin=selection||delivery||isIsolatedMembershipPreview(env)?new URL(request.url).origin:'https://cpvaluemart.com';
- const form=new URLSearchParams({mode:'payment',success_url:checkoutOrigin+'/#/confirmation?session_id={CHECKOUT_SESSION_ID}',cancel_url:checkoutOrigin+'/#/checkout?cancelled=1',client_reference_id:order.id,
+ const form=new URLSearchParams({mode:'payment',success_url:'https://cpvaluemart.com/#/confirmation?session_id={CHECKOUT_SESSION_ID}',cancel_url:'https://cpvaluemart.com/#/checkout?cancelled=1',client_reference_id:order.id,
   customer_email:who.account.checkoutEmail||who.account.email,
   'metadata[order_id]':order.id,'payment_intent_data[metadata][order_id]':order.id,
   // Match the storefront palette and use its first font available in Stripe Checkout.
@@ -247,16 +136,16 @@ async function createSession(request,env){
  }
  catch(error){await db(env,'rpc/release_test_order',{method:'POST',body:{p_order:order.id},allowFailure:true});throw error;}
  if(session.livemode!==live||!sessionPattern(live).test(session.id??'')||
-   (live||selection||delivery)&&(session.amount_total!==order.total_cents||session.currency!=='sgd'||session.client_reference_id!==order.id)||
+   live&&(session.amount_total!==order.total_cents||session.currency!=='sgd'||session.client_reference_id!==order.id)||
    typeof session.url!=='string'||!session.url.startsWith('https://checkout.stripe.com/')){
   await db(env,'rpc/release_test_order',{method:'POST',body:{p_order:order.id},allowFailure:true});
   throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Checkout is temporarily unavailable.');
  }
  const attached=await db(env,'rpc/attach_test_checkout',{method:'POST',body:{p_user:who.account.id,p_order:order.id,p_session:session.id},allowFailure:true});
  if(!attached.ok||attached.data!==true){
-  if(live||selection||delivery){
+  if(live){
    const expired=await stripe(env,'checkout/sessions/'+encodeURIComponent(session.id)+'/expire',new URLSearchParams(),'abandoned/'+order.id);
-   if(expired.id===session.id&&expired.status==='expired'&&expired.livemode===live){
+   if(expired.id===session.id&&expired.status==='expired'&&expired.livemode===true){
     await db(env,'rpc/release_test_order',{method:'POST',body:{p_order:order.id},allowFailure:true});
    }
   }
@@ -269,25 +158,18 @@ async function getPendingLiveOrder(who,env){
   user_id:'eq.'+who.account.id,live_payment:'eq.true',payment_status:'eq.pending',limit:'1'}));
  return data[0];
 }
-async function getPendingCheckout(who,env,live){
- if(live)return getPendingLiveOrder(who,env);
- if(!membershipLaunch(env))return null;
- const {data}=await db(env,'rpc/read_pending_welcome_checkout',{method:'POST',body:{p_user:who.account.id}});
- return data;
-}
 async function manageCheckout(request,env){
  if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
  originGuard(request);
  const who=await identity(request,env);
- const live=liveMode(env);
- if((!live&&!membershipLaunch(env))||!await checkoutAvailable(who,env))throw new ApiError(403,'CHECKOUT_UNAVAILABLE','Checkout is unavailable.');
- const order=await getPendingCheckout(who,env,live);
- if(!order||!sessionPattern(live).test(order.stripe_checkout_session_id??''))throw new ApiError(409,'CHECKOUT_NOT_FOUND','No open checkout was found.');
+ if(!liveMode(env)||!await checkoutAvailable(who,env))throw new ApiError(403,'CHECKOUT_UNAVAILABLE','Checkout is unavailable.');
+ const order=await getPendingLiveOrder(who,env);
+ if(!order||!sessionPattern(true).test(order.stripe_checkout_session_id??''))throw new ApiError(409,'CHECKOUT_NOT_FOUND','No open checkout was found.');
  const {action}=await bodyJSON(request);
  if(!['resume','cancel'].includes(action))throw new ApiError(400,'INVALID_INPUT','Choose a valid checkout action.');
  const sessionId=order.stripe_checkout_session_id;
  const path='checkout/sessions/'+encodeURIComponent(sessionId);
- const owned=session=>session.livemode===live&&session.id===sessionId&&session.metadata?.order_id===order.id;
+ const owned=session=>session.livemode===true&&session.id===sessionId&&session.metadata?.order_id===order.id;
  let session=await stripeRead(env,path);
  if(!owned(session))throw new ApiError(409,'ORDER_CHANGED','Checkout could not be verified.');
  if(action==='resume'&&session.status==='open'&&typeof session.url==='string'&&session.url.startsWith('https://checkout.stripe.com/')){
@@ -296,8 +178,7 @@ async function manageCheckout(request,env){
  if(action==='cancel'){
   if(session.status==='open')session=await stripe(env,path+'/expire',new URLSearchParams(),'cancel/'+order.id);
   if(owned(session)&&session.status==='expired'){
-   const result=await db(env,live?'rpc/cancel_live_checkout':'rpc/cancel_welcome_checkout',
-    {method:'POST',body:{p_user:who.account.id,p_order:order.id,p_session:sessionId}});
+   const result=await db(env,'rpc/cancel_live_checkout',{method:'POST',body:{p_user:who.account.id,p_order:order.id,p_session:sessionId}});
    if(result.data===true)return {status:200,data:{cancelled:true}};
   }
  }
@@ -333,139 +214,19 @@ async function webhook(request,env){
  if(typeof event?.id!=='string'||typeof event?.type!=='string'||event.livemode!==liveMode(env))throw new ApiError(400,'TEST_MODE_REQUIRED','Stripe event mode is invalid.');
  const session=event.data?.object??{},orderId=session.metadata?.order_id;
  if(!['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.expired','checkout.session.async_payment_failed'].includes(event.type))return {status:200,data:{received:true,ignored:true}};
- if(session.metadata?.paid_membership_purchase_id!==undefined)return applyPaidMembershipEvent(env,event,session);
- const activatesOrder=['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type);
- if(activatesOrder&&session.payment_status!=='paid')return {status:200,data:{received:true,ignored:true}};
+ if(['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type)&&session.payment_status!=='paid')return {status:200,data:{received:true,ignored:true}};
  if(!safeId(orderId))return {status:200,data:{received:true,ignored:true}};
- const start=activatesOrder?tiersLaunch(env):null;
- const payment={p_event:event.id,p_type:event.type,p_livemode:event.livemode,p_order:orderId,p_session:String(session.id??''),
-  p_intent:String(session.payment_intent??''),p_amount:Number(session.amount_total??-1),p_currency:String(session.currency??'')};
- let path='rpc/apply_test_payment_event';
- if(start){
-  if(!Number.isSafeInteger(event.created)||event.created<=0||event.created>Math.floor(Date.now()/1000)+300)
-   throw new ApiError(400,'INVALID_WEBHOOK','Invalid Stripe payment timestamp.');
-  if(event.created*1000>=Date.parse(start)){
-   path='rpc/apply_tier_payment_event';
-   Object.assign(payment,{p_paid_at:new Date(event.created*1000).toISOString(),p_tiers_launch:start});
-  }
- }
- const applied=await db(env,path,{method:'POST',body:payment,allowFailure:true});
+ const applied=await db(env,'rpc/apply_test_payment_event',{method:'POST',body:{p_event:event.id,p_type:event.type,p_livemode:event.livemode,p_order:orderId,p_session:String(session.id??''),p_intent:String(session.payment_intent??''),p_amount:Number(session.amount_total??-1),p_currency:String(session.currency??'')},allowFailure:true});
  if(!applied.ok)throw new ApiError(409,'PAYMENT_EVENT_REJECTED','Payment event was rejected.');
  return {status:200,data:{received:true}};
 }
-const refundId=/^re_[A-Za-z0-9_]+$/;
-const failedRefund=status=>status==='failed'||status==='canceled';
-const unverifiedRefund=()=>new ApiError(409,'REFUND_UNVERIFIED','The refund could not be verified. Retry the same operation.');
-async function verifiedStripeRefund(env,orderId,op,live){
- if(!/^pi_[A-Za-z0-9_]+$/.test(op.intent??'')||op.currency!=='sgd')throw unverifiedRefund();
- const intent=await stripeRead(env,'payment_intents/'+encodeURIComponent(op.intent));
- if(intent.id!==op.intent||intent.livemode!==live||intent.currency!==op.currency||intent.status!=='succeeded'||
-    intent.amount!==op.paidAmount||intent.amount_received!==op.paidAmount||intent.metadata?.order_id!==orderId||
-    !/^ch_[A-Za-z0-9_]+$/.test(intent.latest_charge??''))
-  throw new ApiError(409,'PAYMENT_UNVERIFIED','The captured payment could not be verified.');
-
- // Stripe authenticates requests in the same mode as the verified PaymentIntent.
- // Refund objects need not include livemode. Their charge and intent must match.
- const linked=refund=>refund?.object==='refund'&&refundId.test(refund.id??'')&&
-  (refund.livemode===undefined||refund.livemode===live)&&refund.payment_intent===op.intent&&
-  refund.charge===intent.latest_charge&&refund.currency===op.currency&&Number.isSafeInteger(refund.amount)&&refund.amount>0;
- const own=refund=>refund.metadata?.order_id===orderId&&(op.legacy?
-  refund.metadata?.operation_id===undefined:refund.metadata?.operation_id===op.id);
- const params=new URLSearchParams({payment_intent:op.intent,limit:'100'});
- let prior,previousCash=0;
- const seen=new Set();
- for(;;){
-  const page=await stripeRead(env,'refunds?'+params);
-  if(!Array.isArray(page.data)||typeof page.has_more!=='boolean')throw unverifiedRefund();
-  for(const refund of page.data){
-   if(!linked(refund)||seen.has(refund.id))throw unverifiedRefund();
-   seen.add(refund.id);
-   if(own(refund)){
-    if(prior)throw unverifiedRefund();
-    prior=refund;
-   }else if(refund.status==='succeeded')previousCash+=refund.amount;
-   else if(!failedRefund(refund.status))throw unverifiedRefund();
-  }
-  if(!page.has_more)break;
-  if(!page.data.length)throw unverifiedRefund();
-  params.set('starting_after',page.data.at(-1).id);
- }
- if(previousCash!==op.refunded)throw unverifiedRefund();
- const form=new URLSearchParams({payment_intent:op.intent,amount:String(op.amount),'metadata[order_id]':orderId});
- if(!op.legacy)form.set('metadata[operation_id]',op.id);
- const refund=prior??await stripe(env,'refunds',form,'refund/'+(op.legacy?orderId:op.id));
- if(!linked(refund)||!own(refund)||refund.amount!==op.amount)throw unverifiedRefund();
- return refund;
-}
-async function refundOrder(env,actor,data,live){
- const partial=data.action==='refund_items',resume=data.action==='resume_refund';
- const items=partial?data.items:null,requestId=data.requestId??null;
- if(requestId!==null&&(typeof requestId!=='string'||!orderUuid.test(requestId))||
-    resume&&(requestId===null||data.restock!==undefined)||!partial&&data.items!=null||
-    partial&&(requestId===null||!Array.isArray(items)||items.length<1||items.length>200||
-      items.some(item=>typeof item?.sku!=='string'||!item.sku||item.sku.length>200||
-       !Number.isInteger(item.quantity)||item.quantity<1||item.quantity>2147483647)||
-      new Set(items.map(item=>item.sku)).size!==items.length))
-  throw new ApiError(400,'INVALID_INPUT','Check the refund items and quantities.');
- if(!['sandbox','live-pilot','live'].includes(checkoutMode(env)))
-  throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Refunds are temporarily unavailable.');
- const orderId=data.orderId.toLowerCase();
- const prepared=await db(env,resume?'rpc/resume_order_refund':'rpc/prepare_order_refund',{method:'POST',body:{
-  p_actor:actor,p_order:orderId,p_request:requestId,p_live:live,
-  ...(!resume?{p_version:data.version,p_restock:data.restock,p_items:items}:{})
- },allowFailure:true});
- if(!prepared.ok){
-  const code=prepared.data?.message;
-  if(code==='PAYMENT_MODE_MISMATCH')throw new ApiError(409,code,'Payment actions are unavailable for this order in the current checkout mode.');
-  if(code==='REFUND_IN_PROGRESS')throw new ApiError(409,code,'Another refund is in progress. Reload the order and retry that refund.');
-  if(code==='REFUND_REQUEST_CHANGED')throw new ApiError(409,code,'This refund request has changed. Reload the order before retrying.');
-  if(prepared.data?.code==='42501')throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
-  throw new ApiError(409,'ORDER_CHANGED','This order changed or the refund is unavailable. Reload before retrying.');
- }
- const op=prepared.data;
- if(resume&&op===null)throw new ApiError(409,'REFUND_NOT_FOUND','This refund request has not been recorded. Review the quantities and submit again.');
- const terminalFailure=()=>new ApiError(409,'REFUND_FAILED','The payment service failed or cancelled this refund. You can start a new refund.');
- if(op.aborted)throw terminalFailure();
- if(!op.completed){
-  if(!orderUuid.test(op.id??'')||!Number.isSafeInteger(op.amount)||op.amount<0||
-     !Number.isSafeInteger(op.paidAmount)||!Number.isSafeInteger(op.refunded)||op.refunded<0||op.refunded+op.amount>op.paidAmount)
-   throw unverifiedRefund();
-  const refund=op.amount>0?await verifiedStripeRefund(env,orderId,op,live):null;
-  if(refund&&refund.status!=='succeeded'&&!failedRefund(refund.status))
-   throw new ApiError(409,'REFUND_PENDING','The payment service is processing this refund. Retry the same refund later.');
-  const finished=await db(env,'rpc/resolve_order_refund',{method:'POST',body:{
-   p_actor:actor,p_order:orderId,p_request:op.id,p_live:live,p_provider:refund?.id??null,p_status:refund?.status??'no_cash'
-  },allowFailure:true});
-  if(!finished.ok||finished.data!==true)throw new ApiError(409,'OPERATION_PENDING','The payment result is available. Retry the same refund to reconcile the order.');
-  if(refund&&failedRefund(refund.status))throw terminalFailure();
- }
- return {status:200,data:{ok:true,testMode:!live,refund:{amount:op.amount,pointsRestored:op.restored??0,pointsClawedBack:op.earned??0}}};
-}
-export const commerceRoute=path=>paidMembershipRoute(path)||path==='/api/membership'||path==='/api/checkout/quote'||path==='/api/checkout/session'||path==='/api/checkout/status'||path==='/api/checkout/manage'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/membership/points'||path==='/api/admin/orders'||path==='/api/admin/orders/bulk-ship'||path==='/api/admin/orders/bulk-deliver'||path==='/api/admin/order-actions';
+export const commerceRoute=path=>path==='/api/checkout/session'||path==='/api/checkout/status'||path==='/api/checkout/manage'||path==='/api/orders'||path==='/api/orders/receipt'||path==='/api/stripe/webhook'||path==='/api/admin/orders'||path==='/api/admin/orders/bulk-ship'||path==='/api/admin/orders/bulk-deliver'||path==='/api/admin/order-actions';
 export async function handleCommerce(request,env){
  const path=new URL(request.url).pathname;
- if(paidMembershipRoute(path))return handlePaidMembership(request,env,{
-  enabled:deliveryLaunch(env)!==null,checkoutAvailable,stripeReady,liveMode,stripe,stripeRead});
- if(path==='/api/membership'){
-  if(request.method!=='GET')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
-  const who=await identity(request,env);
-  const launch=membershipLaunch(env);
-  if(!launch||who.account.verified!==true)return {status:200,data:{enabled:false,member:who.account.verified===true,welcome:null,campaigns:[]}};
-  const {data}=await db(env,'rpc/read_membership',{method:'POST',body:{p_user:who.account.id,p_launch:launch,p_live:liveMode(env)}});
-  const [points,tier,delivery]=await Promise.all([
-   data.enabled&&pointsActive(env,launch)?readBuyerPoints(env,who.account.id):undefined,
-   data.enabled&&tiersLaunch(env)?db(env,'rpc/read_membership_tier',{method:'POST',body:{p_user:who.account.id}}):undefined,
-   data.enabled&&deliveryLaunch(env)?db(env,'rpc/read_membership_delivery',{method:'POST',
-    body:{p_user:who.account.id,p_live:liveMode(env)}}):undefined
-  ]);
-  return {status:200,data:{...data,points,spendingTier:tier?.data,deliveryAllowance:delivery?.data??undefined,accountId:who.account.id}};
- }
- if(path==='/api/admin/membership/points')return adminMemberPoints(request,env,pointsActive(env));
  if(path==='/api/stripe/webhook'){
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');return webhook(request,env);
  }
  if(path==='/api/checkout/manage')return manageCheckout(request,env);
- if(path==='/api/checkout/quote')return quoteCheckout(request,env);
  if(path==='/api/checkout/status'){
   if(request.method!=='GET')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
   return readCheckoutStatus(request,env);
@@ -474,7 +235,7 @@ export async function handleCommerce(request,env){
   if(request.method==='GET'){
    const who=await identity(request,env);
    const available=await checkoutAvailable(who,env),livePayment=liveMode(env);
-   const pending=available?await getPendingCheckout(who,env,livePayment):null;
+   const pending=available&&livePayment?await getPendingLiveOrder(who,env):null;
    return {status:200,data:{available,livePayment,pending:Boolean(pending?.stripe_checkout_session_id)}};
   }
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');return createSession(request,env);
@@ -483,12 +244,8 @@ export async function handleCommerce(request,env){
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
   originGuard(request);
   const who=await identity(request,env);if(!who.isAdmin)throw new ApiError(403,'ADMIN_REQUIRED','Administrator access is required.');
-  const live=liveMode(env),data=await bodyJSON(request,64*1024);
-  if(typeof data?.orderId!=='string'||!orderUuid.test(data.orderId)||!['cancel','refund','refund_items','resume_refund'].includes(data.action)||
-     data.action!=='resume_refund'&&(!Number.isInteger(data.version)||data.version<1||data.version>2147483647||typeof data.restock!=='boolean'))
-   throw new ApiError(400,'INVALID_INPUT','Check the order operation.');
-  if(data.action!=='cancel')return refundOrder(env,who.account.id,data,live);
-  stripeConfig(env);
+  stripeConfig(env);const live=liveMode(env),data=await bodyJSON(request);
+  if(!safeId(data.orderId)||!Number.isSafeInteger(data.version)||data.version<1||!['cancel','refund'].includes(data.action)||typeof data.restock!=='boolean')throw new ApiError(400,'INVALID_INPUT','Check the order operation.');
   const prepared=await db(env,'rpc/prepare_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_version:data.version,p_action:data.action,p_restock:data.restock,p_live:live},allowFailure:true});
   if(!prepared.ok){
    if(prepared.data?.message==='PAYMENT_MODE_MISMATCH')throw new ApiError(409,'PAYMENT_MODE_MISMATCH','Payment actions are unavailable for this order in the current checkout mode.');
@@ -496,13 +253,29 @@ export async function handleCommerce(request,env){
   }
   const op=prepared.data;
   if(!op.completed){
-   if(!sessionPattern(live).test(op.session??''))throw new ApiError(409,'INVALID_ORDER','Checkout reference is unavailable.');
-   // Retrieve first: an expired session can be retried after a lost response.
-   let session=await stripeRead(env,'checkout/sessions/'+encodeURIComponent(op.session));
-   if(session.status==='open')session=await stripe(env,'checkout/sessions/'+encodeURIComponent(op.session)+'/expire',new URLSearchParams(),'cancel/'+data.orderId);
-   if(session.livemode===live&&session.id===op.session&&session.status==='complete')await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:'checkout_completed'}});
-   if(session.livemode!==live||session.id!==op.session||session.status!=='expired')throw new ApiError(409,'ORDER_CHANGED','Checkout cannot be cancelled. Reconcile its payment first.');
-   const finished=await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:session.id},allowFailure:true});
+   let provider;
+   if(data.action==='refund'){
+    if(!/^pi_[A-Za-z0-9_]+$/.test(op.intent??''))throw new ApiError(409,'INVALID_ORDER','Payment reference is unavailable.');
+    const intent=await stripeRead(env,'payment_intents/'+encodeURIComponent(op.intent));
+    if(intent.livemode!==live||intent.id!==op.intent||intent.currency!==op.currency||intent.amount!==op.amount||intent.metadata?.order_id!==data.orderId)throw new ApiError(409,'PAYMENT_UNVERIFIED','The payment could not be verified.');
+    const existing=await stripeRead(env,'refunds?'+new URLSearchParams({payment_intent:op.intent,limit:'100'}));
+    if(!Array.isArray(existing.data))throw new ApiError(503,'CHECKOUT_UNAVAILABLE','Refunds are unavailable.');
+    const prior=existing.data.filter(refund=>refund.metadata?.order_id===data.orderId);
+    if(prior.length>1)throw new ApiError(409,'REFUND_UNVERIFIED','Refund reconciliation requires administrator review.');
+    const refund=prior[0]??await stripe(env,'refunds',new URLSearchParams({payment_intent:op.intent,amount:String(op.amount),'metadata[order_id]':data.orderId}),'refund/'+data.orderId);
+    if((live&&refund.livemode!==true)||refund.payment_intent!==op.intent||refund.amount!==op.amount||refund.currency!==op.currency||!/^re_/.test(refund.id??''))throw new ApiError(409,'REFUND_UNVERIFIED','The refund could not be verified. Retry this same operation.');
+    if(refund.status!=='succeeded')throw new ApiError(409,'REFUND_PENDING','The refund is not complete. Retry this same operation later.');
+    provider=refund.id;
+   }else{
+    if(!sessionPattern(live).test(op.session??''))throw new ApiError(409,'INVALID_ORDER','Checkout reference is unavailable.');
+    // Retrieve first: an expired session can be retried after a lost response.
+    let session=await stripeRead(env,'checkout/sessions/'+encodeURIComponent(op.session));
+    if(session.status==='open')session=await stripe(env,'checkout/sessions/'+encodeURIComponent(op.session)+'/expire',new URLSearchParams(),'cancel/'+data.orderId);
+    if(session.livemode===live&&session.id===op.session&&session.status==='complete')await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:'checkout_completed'}});
+    if(session.livemode!==live||session.id!==op.session||session.status!=='expired')throw new ApiError(409,'ORDER_CHANGED','Checkout cannot be cancelled. Reconcile its payment first.');
+    provider=session.id;
+   }
+   const finished=await db(env,'rpc/finish_test_order_operation',{method:'POST',body:{p_actor:who.account.id,p_order:data.orderId,p_action:data.action,p_provider:provider},allowFailure:true});
    if(!finished.ok||finished.data!==true)throw new ApiError(409,'OPERATION_PENDING','Provider operation recorded. Retry the same action to reconcile the order.');
   }
   return {status:200,data:{ok:true,testMode:!live}};
@@ -543,7 +316,7 @@ export async function handleCommerce(request,env){
    if(!changed.ok)throw new ApiError(changed.data?.code==='40001'?409:400,changed.data?.code==='40001'?'VERSION_CONFLICT':'INVALID_ORDER','This order changed or the fulfilment update is invalid.');
   }
   const rows=await db(env,'rpc/read_admin_orders',{method:'POST',body:{p_actor:who.account.id}});
-  return {status:200,data:{orders:rows.data.map(row=>({...orderShape({...row,number:row.number,items:row.items}),version:row.version,pendingRefund:row.pending_refund??null,email:row.email,name:row.customer_name,address:{name:row.full_name,line:row.address_line,postal:row.postal_code}}))}};
+  return {status:200,data:{orders:rows.data.map(row=>({...orderShape({...row,number:row.number,items:row.items}),version:row.version,email:row.email,name:row.customer_name,address:{name:row.full_name,line:row.address_line,postal:row.postal_code}}))}};
  }
  if(path==='/api/orders/receipt'){
   if(request.method!=='POST')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');originGuard(request);
@@ -555,7 +328,7 @@ export async function handleCommerce(request,env){
  }
  if(path==='/api/orders'){
   if(request.method!=='GET')throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
-  const who=await identity(request,env);const rows=await db(env,'orders?'+new URLSearchParams({select:'id,order_number,live_payment,payment_status,fulfilment_status,tracking_number,version,subtotal_cents,shipping_cents,discount_cents,total_cents,created_at,paid_at,refunded_cents,refunded_merchandise_cents,order_items(sku,product_name,variant_name,image_url,unit_cents,quantity,refunded_quantity)',user_id:'eq.'+who.account.id,order:'created_at.desc',limit:'100'}));
+  const who=await identity(request,env);const rows=await db(env,'orders?'+new URLSearchParams({select:'id,order_number,live_payment,payment_status,fulfilment_status,tracking_number,version,subtotal_cents,shipping_cents,discount_cents,total_cents,created_at,paid_at,order_items(sku,product_name,variant_name,image_url,unit_cents,quantity)',user_id:'eq.'+who.account.id,order:'created_at.desc',limit:'100'}));
   return {status:200,data:{orders:rows.data.map(row=>orderShape({...row,number:'CVM-'+row.order_number,items:row.order_items}))}};
  }
  throw new ApiError(404,'NOT_FOUND','API endpoint not found.');

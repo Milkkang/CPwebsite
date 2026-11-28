@@ -9,7 +9,6 @@ export const categories = [
   ['others','Others','＋','sage']
 ];
 export const cash = cents => 'S$' + (cents / 100).toFixed(2);
-export const netOrderTotal = order => Math.max(0,order.totals.total-(order.refundedCents??0));
 export const escape = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
 export const categoryName = id => categories.find(c => c[0] === id)?.[1] ?? 'Others';
 export const stock = product => product.variants.reduce((sum, row) => sum + row.stock, 0);
