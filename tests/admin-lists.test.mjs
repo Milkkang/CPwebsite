@@ -89,25 +89,3 @@ test('customer order value uses paid live sales and the order link filters by ex
   assert.doesNotMatch(orders,/CVM-OTHER/);
  } finally {state.adminOrders=previous;}
 });
-
-test('order detail limits item returns to remaining quantities and shows recorded refunds',()=>{
- const old=state.adminOrders;
- try{
-  const order={id:'CVM-501',date:'2026-11-24',status:'Delivered',paymentStatus:'paid',livePayment:true,
-   refundedCents:1800,totals:{total:4500},items:[
-    {sku:'A',name:'Fixture A',option:'One',price:2000,qty:1,refundedQty:1},
-    {sku:'B',name:'Fixture B',option:'One',price:1500,qty:2,refundedQty:1}
-   ]};
-  state.adminOrders=[order];
-  let html=adminPage('orders',order.id,new URLSearchParams());
-  assert.doesNotMatch(html,/data-refund-sku="A"/);
-  assert.match(html,/max="1"[^>]+data-refund-sku="B"/);
-  assert.match(html,/data-order-action="refund_items"/);
-  assert.match(html,/Refunded quantity 1/);
-  assert.match(html,/Refunded <strong>S\$18\.00/);
-  order.pendingRefund={requestId:'fixture',items:[{sku:'B',quantity:1}],amount:900,restock:false};
-  html=adminPage('orders',order.id,new URLSearchParams());
-  assert.match(html,/Retry refund/);
-  assert.doesNotMatch(html,/data-order-action="refund_items"/);
- }finally{state.adminOrders=old;}
-});
